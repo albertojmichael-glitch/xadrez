@@ -1,3 +1,153 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Xadrez vs Stockfish</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    body {
+      background-color: #1e1e24;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 16px;
+      padding: 20px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      background: #2b2b36;
+      padding: 12px 20px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    select, button {
+      padding: 8px 14px;
+      border-radius: 6px;
+      border: none;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    select {
+      background: #3a3a48;
+      color: #fff;
+    }
+
+    button {
+      background: #4caf50;
+      color: white;
+      font-weight: bold;
+      transition: opacity 0.2s;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    #status {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+
+    /* Tabuleiro 8x8 */
+    #board {
+      display: grid;
+      grid-template-columns: repeat(8, 65px);
+      grid-template-rows: repeat(8, 65px);
+      border: 6px solid #333;
+      border-radius: 4px;
+      /* Caso verde3.webp seja a imagem de fundo do tabuleiro: */
+      background-image: url('./assets/verde3.webp');
+      background-size: cover;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    .square {
+      width: 65px;
+      height: 65px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Cores semi-transparentes caso queira mesclar com verde3.webp, ou sólidas */
+    .square.light {
+      background-color: rgba(238, 238, 210, 0.85);
+    }
+
+    .square.dark {
+      background-color: rgba(118, 150, 86, 0.85);
+    }
+
+    .square.selected {
+      background-color: rgba(246, 246, 105, 0.9) !important;
+    }
+
+    .square.legal-move::after {
+      content: '';
+      width: 18px;
+      height: 18px;
+      background-color: rgba(0, 0, 0, 0.25);
+      border-radius: 50%;
+      position: absolute;
+    }
+
+    .square img {
+      width: 82%;
+      height: 82%;
+      object-fit: contain;
+      pointer-events: none;
+    }
+
+    @media (max-width: 600px) {
+      #board {
+        grid-template-columns: repeat(8, 11vw);
+        grid-template-rows: repeat(8, 11vw);
+      }
+      .square {
+        width: 11vw;
+        height: 11vw;
+      }
+    }
+  </style>
+</head>
 <body>
-    <h1> olaaaa </h1>
+
+  <h1>Xadrez vs Bot (Stockfish)</h1>
+
+  <div class="controls">
+    <label for="difficulty">Dificuldade:</label>
+    <select id="difficulty">
+      <option value="easy">Fácil (Iniciante)</option>
+      <option value="medium" selected>Médio (Intermediário)</option>
+      <option value="hard">Difícil (Avançado)</option>
+      <option value="master">Mestre (Stockfish Máximo)</option>
+    </select>
+    <button id="resetBtn">Novo Jogo</button>
+  </div>
+
+  <div id="status">Sua vez (Brancas)</div>
+
+  <div id="board"></div>
+
+  <script type="module" src="./script.ts"></script>
 </body>
+</html>

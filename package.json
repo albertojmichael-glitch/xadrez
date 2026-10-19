@@ -1,0 +1,30 @@
+{
+  "name": "xadrez",
+  "version": "1.0.0",
+  "description": "jogo de xadrez web",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite client",
+    "build": "vite build client",
+    "start": "vite preview client --host 0.0.0.0 --port $PORT"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/albertojmichael-glitch/xadrez.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/albertojmichael-glitch/xadrez/issues"
+  },
+  "homepage": "https://github.com/albertojmichael-glitch/xadrez#readme",
+  "dependencies": {
+    "chess.js": "^1.0.0-beta.8"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
