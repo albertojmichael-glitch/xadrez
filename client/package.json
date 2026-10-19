@@ -4,9 +4,9 @@
   "description": "jogo de xadrez web",
   "main": "index.js",
   "scripts": {
-    "dev": "vite client",
-    "build": "vite build client",
-    "start": "vite preview client --host 0.0.0.0 --port $PORT"
+    "dev": "vite",
+    "build": "vite build",
+    "start": "vite preview --host 0.0.0.0 --port $PORT"
   },
   "repository": {
     "type": "git",
