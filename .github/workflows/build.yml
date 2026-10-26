@@ -22,22 +22,22 @@ jobs:
         run: |
           dotnet publish Xadrez.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./entrega
 
-      - name: Copiar suas imagens (client/assets) e baixar Stockfish
+      - name: Copiar suas imagens (client/assets) e baixar Stockfish 16.1
         shell: pwsh
         run: |
-          # Copia a pasta client/assets para dentro da pasta do executavel
           Copy-Item -Path "./client/assets" -Destination "./entrega/assets" -Recurse -Force
 
-          # Baixa o Stockfish oficial para Windows e coloca junto ao Xadrez.exe
           try {
-            Invoke-WebRequest -Uri "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-windows-x86-64-avx2.zip" -OutFile "sf.zip"
+            $url = "https://github.com/official-stockfish/Stockfish/releases/download/sf_16.1/stockfish-windows-x86-64-avx2.zip"
+            Invoke-WebRequest -Uri $url -OutFile "sf.zip"
             Expand-Archive -Path "sf.zip" -DestinationPath "./sf_temp" -Force
             $sfExe = Get-ChildItem -Path "./sf_temp" -Filter "*.exe" -Recurse | Select-Object -First 1
             if ($sfExe) {
-              Copy-Item $sfExe.FullName -Destination "./entrega/stockfish.exe"
+              Copy-Item $sfExe.FullName -Destination "./entrega/stockfish.exe" -Force
+              Write-Host "Stockfish copiado com sucesso!"
             }
           } catch {
-            Write-Host "Usando IA interna de fallback caso o download externo falhe."
+            Write-Host "Aviso: Usando Engine Tatica Posicional Interna."
           }
 
       - name: Disponibilizar .exe para Download no GitHub Actions

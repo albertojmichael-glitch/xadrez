@@ -20,12 +20,9 @@ namespace XadrezApp
 
         private bool isBotThinking = false;
         private bool gameOver = false;
-        private double lastWhiteEval = 0.0;
 
-        // Modo Quebra-Cabeças (Puzzles)
         private TacticalPuzzle? activePuzzle = null;
 
-        // Relógio Digital (Fischer & Bronstein)
         private System.Windows.Forms.Timer clockTimer = null!;
         private string timeControlMode = "Fischer 5+3";
         private double whiteSecondsLeft = 300;
@@ -34,7 +31,6 @@ namespace XadrezApp
         private bool isBronsteinMode = false;
         private double turnElapsedSeconds = 0;
 
-        // Seleção, Quadrados Laranjas, Premove e Setas de Botão Direito
         private Point? selectedSquare = null;
         private List<Point> legalMoves = new List<Point>();
         private Point? premoveSelection = null;
@@ -46,7 +42,6 @@ namespace XadrezApp
 
         private string currentTheme = "Madeira";
 
-        // Controles da Interface Clássica
         private Panel boardPanel = null!;
         private ListView moveHistoryList = null!;
         private ListView legalMovesList = null!;
@@ -80,7 +75,6 @@ namespace XadrezApp
 
         private void InitClassicUI()
         {
-            // 1. Barra de Menu Superior Clássica
             var menuStrip = new MenuStrip
             {
                 BackColor = Color.FromArgb(236, 233, 216),
@@ -96,7 +90,7 @@ namespace XadrezApp
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("Sair", null, (s, e) => Close());
 
-            var puzzlesMenu = new ToolStripMenuItem("Puzzles Táticos");
+            var puzzlesMenu = new ToolStripMenuItem("Puzzles Táticos (15 Desafios)");
             for (int i = 0; i < StudyLibrary.Puzzles.Count; i++)
             {
                 var pz = StudyLibrary.Puzzles[i];
@@ -111,7 +105,7 @@ namespace XadrezApp
             viewMenu.DropDownItems.Add("Branco e Verde", null, (s, e) => SetTheme("Branco e Verde"));
 
             var searchMenu = new ToolStripMenuItem("Search & Estudo");
-            searchMenu.DropDownItems.Add("Analisar Posição (Stockfish)", null, async (s, e) => await RunAnalysisAndHintAsync(false));
+            searchMenu.DropDownItems.Add("Analisar Posição (IA)", null, async (s, e) => await RunAnalysisAndHintAsync(false));
             searchMenu.DropDownItems.Add("Ajuda de Lance (Help to Move)", null, async (s, e) => await RunAnalysisAndHintAsync(true));
 
             menuStrip.Items.Add(fileMenu);
@@ -121,7 +115,6 @@ namespace XadrezApp
             MainMenuStrip = menuStrip;
             Controls.Add(menuStrip);
 
-            // 2. Barra de Ferramentas Quadrada (Estilo Lucas Chess)
             var toolPanel = new Panel
             {
                 Location = new Point(0, 24),
@@ -155,8 +148,8 @@ namespace XadrezApp
 
             var lblDiff = new Label { Text = "IA:", Location = new Point(564, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
             difficultyCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(586, 11), Width = 112 };
-            difficultyCombo.Items.AddRange(new object[] { "Fácil (Nível 1)", "Médio (Nível 7)", "Difícil (Nível 14)", "Mestre (Nível 20)" });
-            difficultyCombo.SelectedIndex = 1;
+            difficultyCombo.Items.AddRange(new object[] { "Fácil (Iniciante)", "Médio (Clube)", "Difícil (Forte)", "Mestre (Máximo)" });
+            difficultyCombo.SelectedIndex = 0; // Começa no Fácil por padrão
 
             var lblClock = new Label { Text = "Relógio:", Location = new Point(704, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
             clockCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(754, 11), Width = 105 };
@@ -176,7 +169,6 @@ namespace XadrezApp
             toolPanel.Controls.Add(themeCombo);
             Controls.Add(toolPanel);
 
-            // 3. Faixa da Biblioteca de Aberturas (Opening Book)
             openingBookLabel = new Label
             {
                 Text = "Abertura: Posição Inicial",
@@ -189,7 +181,6 @@ namespace XadrezApp
             };
             Controls.Add(openingBookLabel);
 
-            // 4. Painel do Tabuleiro 8x8
             int boardTotalSize = SquareSize * 8 + BoardOffset * 2;
             boardPanel = new DoubleBufferedPanel
             {
@@ -203,7 +194,6 @@ namespace XadrezApp
             boardPanel.MouseUp += BoardPanel_MouseUp;
             Controls.Add(boardPanel);
 
-            // 5. Relógios Digitais e Tabelas Laterais
             legalMovesList = new ListView
             {
                 Location = new Point(564, 102),
@@ -217,7 +207,6 @@ namespace XadrezApp
             legalMovesList.Columns.Add("UCI", 48);
             Controls.Add(legalMovesList);
 
-            // Relógio Brancas e Pretas
             whiteClockLabel = new Label
             {
                 Text = "Brancas: 05:00",
@@ -243,7 +232,6 @@ namespace XadrezApp
             Controls.Add(whiteClockLabel);
             Controls.Add(blackClockLabel);
 
-            // Tabela de Histórico com Classificação de Lances (!!, !, ?!, ?, ??)
             moveHistoryList = new ListView
             {
                 Location = new Point(696, 102),
@@ -254,13 +242,12 @@ namespace XadrezApp
                 BorderStyle = BorderStyle.Fixed3D
             };
             moveHistoryList.Columns.Add("N.", 28);
-            moveHistoryList.Columns.Add("White", 62);
-            moveHistoryList.Columns.Add("Black", 58);
+            moveHistoryList.Columns.Add("White", 60);
+            moveHistoryList.Columns.Add("Black", 52);
             moveHistoryList.Columns.Add("Aval.", 46);
-            moveHistoryList.Columns.Add("Análise", 52);
+            moveHistoryList.Columns.Add("Análise", 60);
             Controls.Add(moveHistoryList);
 
-            // 6. Controles de Busca e Tutor Abaixo do Tabuleiro
             var btnStartSearch = new Button
             {
                 Text = "Start search",
@@ -292,7 +279,7 @@ namespace XadrezApp
 
             tutorStatusLabel = new Label
             {
-                Text = "Tutor ativo | Roque, En Passant, Relógio Fischer/Bronstein e Análise prontos",
+                Text = "Tutor ativo | Clique em 'Ajuda Lance' para ver a seta da melhor jogada!",
                 Location = new Point(400, 590),
                 Size = new Size(548, 24),
                 BorderStyle = BorderStyle.Fixed3D,
@@ -306,7 +293,6 @@ namespace XadrezApp
             Controls.Add(btnAbortSearch);
             Controls.Add(tutorStatusLabel);
 
-            // 7. Log de Análise UCI Inferior
             engineLogBox = new TextBox
             {
                 Location = new Point(12, 622),
@@ -337,7 +323,7 @@ namespace XadrezApp
                         whiteSecondsLeft = 0;
                         UpdateClockLabels();
                         gameOver = true;
-                        tutorStatusLabel.Text = "Tempo esgotado! Vitória do Stockfish (Pretas) no relógio.";
+                        tutorStatusLabel.Text = "Tempo esgotado! Vitória das Pretas no relógio.";
                         MessageBox.Show("Seu tempo acabou! Vitória das Pretas por tempo.", "Relógio Esgotado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
@@ -376,12 +362,9 @@ namespace XadrezApp
         private void ApplyClockIncrement(bool forWhite)
         {
             if (timeControlMode == "Sem Relógio" || activePuzzle != null) return;
-
-            // Fischer adiciona todo o acréscimo; Bronstein devolve apenas até o tempo gasto no lance
             double bonus = isBronsteinMode ? Math.Min(turnElapsedSeconds, incrementSeconds) : incrementSeconds;
             if (forWhite) whiteSecondsLeft += bonus;
             else blackSecondsLeft += bonus;
-
             turnElapsedSeconds = 0;
             UpdateClockLabels();
         }
@@ -455,7 +438,6 @@ namespace XadrezApp
             history.Clear();
             isBotThinking = false;
             gameOver = false;
-            lastWhiteEval = 0.0;
             selectedSquare = null;
             legalMoves.Clear();
             premoveSelection = null;
@@ -467,7 +449,8 @@ namespace XadrezApp
             ConfigureClockMode(clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3");
             moveHistoryList.Items.Clear();
             openingBookLabel.Text = "Abertura: Posição Inicial (Aguardando 1º lance)";
-            engineLogBox.Text = "Motor pronto. Todas as regras FIDE (Roque, En Passant, 50 lances, 3 repetições) ativas." + Environment.NewLine;
+            string sfStatus = engine.IsUsingStockfish ? "Stockfish Oficial Conectado" : "Engine Tática Posicional Interna Ativa";
+            engineLogBox.Text = $"[{sfStatus}] 15 Puzzles e Análise Pós-Lance prontos." + Environment.NewLine;
             tutorStatusLabel.Text = "Sua vez (Brancas)";
 
             RefreshLegalMovesTable();
@@ -490,7 +473,7 @@ namespace XadrezApp
         {
             string fen = rules.ToFen();
             Clipboard.SetText(fen);
-            MessageBox.Show($"FEN copiado para a área de transferência:\n\n{fen}", "FEN Copiado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show($"FEN copiado:\n\n{fen}", "FEN Copiado", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void PromptLoadFen()
@@ -534,11 +517,11 @@ namespace XadrezApp
             if (sfd.ShowDialog() == DialogResult.OK)
             {
                 File.WriteAllText(sfd.FileName, pgn);
-                MessageBox.Show("Arquivo PGN salvo e copiado para a área de transferência!", "PGN Exportado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show("Arquivo PGN salvo e copiado!", "PGN Exportado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             else
             {
-                MessageBox.Show($"O PGN também já foi copiado para sua área de transferência:\n\n{pgn}", "PGN Copiado", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                MessageBox.Show($"PGN copiado para sua área de transferência:\n\n{pgn}", "PGN Copiado", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
 
@@ -565,7 +548,7 @@ namespace XadrezApp
         {
             if (gameOver) return;
             gameOver = true;
-            tutorStatusLabel.Text = "Você desistiu. Vitória do Stockfish (Pretas).";
+            tutorStatusLabel.Text = "Você desistiu. Vitória das Pretas.";
             MessageBox.Show("Você desistiu da partida. Vitória das Pretas!", "Fim de Jogo", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
@@ -831,7 +814,7 @@ namespace XadrezApp
 
         private async Task ExecutePlayerAndBotTurnAsync(Point from, Point to)
         {
-            // Se estiver no Modo Puzzle, valida se o lance corresponde à solução tática
+            // Se estiver no Modo Puzzle, valida e avança automaticamente para o próximo!
             if (activePuzzle != null)
             {
                 string playedUci = $"{ChessRules.SquareToAlgebraic(from)}{ChessRules.SquareToAlgebraic(to)}";
@@ -841,19 +824,24 @@ namespace XadrezApp
                     selectedSquare = null;
                     legalMoves.Clear();
                     boardPanel.Invalidate();
-                    tutorStatusLabel.Text = $"PARABÉNS! Você resolveu o {activePuzzle.Title}!";
-                    MessageBox.Show($"Excelente visão tática! Lance correto ({playedUci}).\n\nEscolha outro Puzzle no menu superior ou clique em Reiniciar.", "Puzzle Resolvido!", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    tutorStatusLabel.Text = $"PARABÉNS! Você acertou o {activePuzzle.Title}!";
+
+                    int currentIdx = StudyLibrary.Puzzles.IndexOf(activePuzzle);
+                    var nextPuzzle = StudyLibrary.Puzzles[(currentIdx + 1) % StudyLibrary.Puzzles.Count];
+                    var ans = MessageBox.Show($"Excelente visão tática! Lance correto ({playedUci}).\n\nDeseja ir para o próximo desafio ({nextPuzzle.Title})?", "Puzzle Resolvido!", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                    if (ans == DialogResult.Yes)
+                        StartPuzzle(nextPuzzle);
                 }
                 else
                 {
-                    tutorStatusLabel.Text = $"Lance incorreto ({playedUci}). Tente novamente! Dica: {activePuzzle.Hint}";
+                    tutorStatusLabel.Text = $"Lance incorreto ({playedUci}). Dica: {activePuzzle.Hint}";
                 }
                 return;
             }
 
-            history.Push(rules.CreateSnapshot());
+            var preMoveSnapshot = rules.CreateSnapshot();
+            history.Push(preMoveSnapshot);
 
-            // Verifica se o lance é Promoção de Peão e abre a janela de escolha
             char? promoPiece = null;
             if (rules.Board[from.Y, from.X] == 'P' && to.Y == 0)
                 promoPiece = PromotionDialog.AskPiece(true);
@@ -879,18 +867,24 @@ namespace XadrezApp
             if (CheckAndAnnounceEndGame()) return;
 
             isBotThinking = true;
-            tutorStatusLabel.Text = "Stockfish está pensando e classificando o seu lance...";
-            await Task.Delay(150);
+            tutorStatusLabel.Text = "Analisando a precisão do seu lance e calculando resposta do Bot...";
+            await Task.Delay(120);
 
-            int idx = difficultyCombo.SelectedIndex;
-            int skill = idx switch { 0 => 1, 1 => 7, 2 => 14, _ => 20 };
-            int depth = idx switch { 0 => 3, 1 => 6, 2 => 10, _ => 14 };
+            int diffIdx = difficultyCombo.SelectedIndex;
 
-            var botAnalysis = await Task.Run(() => engine.Analyze(rules, false, skill, depth));
+            // 1. Avalia qual era o melhor lance das Brancas ANTES da sua jogada
+            var rulesBefore = new ChessRules();
+            rulesBefore.RestoreSnapshot(preMoveSnapshot);
+            var bestWhiteBefore = await Task.Run(() => engine.Analyze(rulesBefore, true, diffIdx, isHintOrEvaluationOnly: true));
 
-            // Classifica o lance que o jogador acabou de fazer (!!, !, ?!, ?, ??)
-            var classification = EngineService.ClassifyMove(lastWhiteEval, botAnalysis.EvalWhitePawns, false);
-            lastWhiteEval = botAnalysis.EvalWhitePawns;
+            // 2. Avalia a posição DEPOIS da sua jogada e escolhe o lance do Bot (Pretas)
+            var botAnalysis = await Task.Run(() => engine.Analyze(rules, false, diffIdx, isHintOrEvaluationOnly: false));
+
+            bool playedBest = bestWhiteBefore.BestMove.HasValue &&
+                              bestWhiteBefore.BestMove.Value.from == from &&
+                              bestWhiteBefore.BestMove.Value.to == to;
+
+            var classification = EngineService.ClassifyMove(bestWhiteBefore.EvalWhitePawns, botAnalysis.EvalWhitePawns, playedBest);
 
             if (!string.IsNullOrEmpty(classification.badge))
                 rowItem.SubItems[1].Text = $"{whiteSan} {classification.badge}";
@@ -915,9 +909,11 @@ namespace XadrezApp
 
             if (CheckAndAnnounceEndGame()) return;
 
-            tutorStatusLabel.Text = $"Seu lance foi: {classification.description} {classification.badge} | Avaliação: {botAnalysis.EvalText}";
+            string bestSuggestion = bestWhiteBefore.BestMove.HasValue
+                ? $" (Melhor era: {ChessRules.SquareToAlgebraic(bestWhiteBefore.BestMove.Value.from)}-{ChessRules.SquareToAlgebraic(bestWhiteBefore.BestMove.Value.to)})"
+                : "";
+            tutorStatusLabel.Text = $"Seu lance: {classification.description} {classification.badge}{(playedBest ? "" : bestSuggestion)} | Aval: {botAnalysis.EvalText}";
 
-            // Executa Premove (Jogada Automática) se agendada
             if (queuedPremove.HasValue)
             {
                 var pre = queuedPremove.Value;
@@ -939,9 +935,9 @@ namespace XadrezApp
         private async Task RunAnalysisAndHintAsync(bool showHintArrow)
         {
             if (gameOver || isBotThinking) return;
-            tutorStatusLabel.Text = "Calculando melhor lance e analisando posição...";
+            tutorStatusLabel.Text = "Calculando o melhor lance tático/posicional para você...";
 
-            var res = await Task.Run(() => engine.Analyze(rules, rules.WhiteTurn, 20, 10));
+            var res = await Task.Run(() => engine.Analyze(rules, rules.WhiteTurn, 3, isHintOrEvaluationOnly: true));
             if (res.BestMove.HasValue)
             {
                 if (showHintArrow)
@@ -953,7 +949,7 @@ namespace XadrezApp
                 if (!string.IsNullOrWhiteSpace(res.LogLine))
                     engineLogBox.AppendText(res.LogLine + Environment.NewLine);
 
-                string mvStr = $"{ChessRules.SquareToAlgebraic(res.BestMove.Value.from)}-{ChessRules.SquareToAlgebraic(res.BestMove.Value.to)}";
+                string mvStr = $"{ChessRules.SquareToAlgebraic(res.BestMove.Value.from)} -> {ChessRules.SquareToAlgebraic(res.BestMove.Value.to)}";
                 tutorStatusLabel.Text = $"Melhor lance sugerido pela IA: {mvStr} (Avaliação: {res.EvalText})";
             }
         }
