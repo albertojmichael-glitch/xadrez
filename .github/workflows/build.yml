@@ -1,0 +1,47 @@
+name: Gerar Executavel Windows (.exe)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Baixar codigo do repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Compilar Xadrez.exe (Arquivo Unico)
+        run: |
+          dotnet publish Xadrez.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./entrega
+
+      - name: Copiar suas imagens (client/assets) e baixar Stockfish
+        shell: pwsh
+        run: |
+          # Copia a pasta client/assets para dentro da pasta do executavel
+          Copy-Item -Path "./client/assets" -Destination "./entrega/assets" -Recurse -Force
+
+          # Baixa o Stockfish oficial para Windows e coloca junto ao Xadrez.exe
+          try {
+            Invoke-WebRequest -Uri "https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-windows-x86-64-avx2.zip" -OutFile "sf.zip"
+            Expand-Archive -Path "sf.zip" -DestinationPath "./sf_temp" -Force
+            $sfExe = Get-ChildItem -Path "./sf_temp" -Filter "*.exe" -Recurse | Select-Object -First 1
+            if ($sfExe) {
+              Copy-Item $sfExe.FullName -Destination "./entrega/stockfish.exe"
+            }
+          } catch {
+            Write-Host "Usando IA interna de fallback caso o download externo falhe."
+          }
+
+      - name: Disponibilizar .exe para Download no GitHub Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: Xadrez-Windows-Exe
+          path: ./entrega/
