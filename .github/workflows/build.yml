@@ -3,6 +3,8 @@ name: Gerar Executavel Windows (.exe)
 on:
   push:
     branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -17,6 +19,12 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      # 🔒 TRAVA DE QUALIDADE: Se qualquer teste falhar aqui, o workflow para
+      # imediatamente com erro (❌) e o Xadrez.exe NÃO é gerado!
+      - name: Executar Testes Automatizados (Trava de Qualidade)
+        run: |
+          dotnet test ./tests/Xadrez.Tests/Xadrez.Tests.csproj --configuration Release --verbosity normal
 
       - name: Compilar Xadrez.exe (Arquivo Unico)
         run: |
