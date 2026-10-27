@@ -69,6 +69,31 @@ namespace XadrezApp
             return "Meio-Jogo / Variante Livre";
         }
 
+        // Verifica se a sequência atual de lances ainda faz parte de uma linha teórica do livro de aberturas
+        public static bool IsBookMove(IReadOnlyList<string> sanMoves)
+        {
+            if (sanMoves.Count == 0 || sanMoves.Count > 10) return false;
+
+            foreach (var entry in Openings)
+            {
+                if (sanMoves.Count <= entry.moves.Length)
+                {
+                    bool match = true;
+                    for (int i = 0; i < sanMoves.Count; i++)
+                    {
+                        string cleanSan = sanMoves[i].TrimEnd('+', '#', '!', '?');
+                        if (cleanSan != entry.moves[i])
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) return true;
+                }
+            }
+            return false;
+        }
+
         // 15 Quebra-Cabeças Táticos (Puzzles)
         public static readonly List<TacticalPuzzle> Puzzles = new()
         {
@@ -92,41 +117,41 @@ namespace XadrezApp
             {
                 Title = "Puzzle #3: Garfo Real de Cavalo",
                 Theme = "Ataque Duplo (Rei e Dama)",
-                Fen = "4k3/8/8/3q4/8/4N3/8/4K3 w - - 0 1",
-                SolutionUci = "e3f5",
-                Hint = "Encontre a casa onde o Cavalo dá xeque no Rei em e8 e ataca a Dama em d5 ao mesmo tempo! (Ou c7/f5)"
+                Fen = "4k3/8/N7/3q4/8/8/8/4K3 w - - 0 1",
+                SolutionUci = "a6c7",
+                Hint = "Leve o Cavalo para c7 dando xeque no Rei em e8 e atacando a Dama em d5 ao mesmo tempo!"
             },
             new TacticalPuzzle
             {
                 Title = "Puzzle #4: Espeto de Bispo na Grande Diagonal",
                 Theme = "Espeto Tático (Rei e Torre)",
-                Fen = "7r/1p4k1/p5p1/8/8/2B5/PPP2PPP/6K1 w - - 0 1",
-                SolutionUci = "c3h8",
-                Hint = "Capture a Torre dando xeque na grande diagonal!"
+                Fen = "7r/1p4k1/pB4p1/8/8/8/PPP2PPP/6K1 w - - 0 1",
+                SolutionUci = "b6d4",
+                Hint = "Dê xeque com o Bispo em d4 na grande diagonal para espetar o Rei em g7 e ganhar a Torre em h8!"
             },
             new TacticalPuzzle
             {
                 Title = "Puzzle #5: Mate de Legal",
                 Theme = "Mate Clássico de Cavalos e Bispo",
-                Fen = "r2qkbnr/ppp2ppp/2np4/4N3/2B1P1b1/2N5/PPPP1PPP/R1BbK2R w KQkq - 0 6",
+                Fen = "r2qkbnr/ppp2ppp/2np4/4N3/2B1P3/2N5/PPPP1PPP/R1BbK2R w KQkq - 0 6",
                 SolutionUci = "c4f7",
-                Hint = "O Rei preto não tem casas seguras. Dê o xeque mortal em f7 com o Bispo!"
+                Hint = "As Pretas capturaram a Dama achando que o Cavalo estava cravado. Dê o xeque em f7 com o Bispo (seguido de Cd5#)!"
             },
             new TacticalPuzzle
             {
                 Title = "Puzzle #6: Mate Sufocado (Philidor)",
                 Theme = "Mate de Cavalo com Rei Trancado",
-                Fen = "6rk/6pp/8/5N2/8/8/8/7K w - - 0 1",
-                SolutionUci = "f5f7",
-                Hint = "A Torre e os peões pretos trancam o próprio Rei. Dê o xeque de Cavalo em f7!"
+                Fen = "6rk/6pp/8/6N1/8/8/8/7K w - - 0 1",
+                SolutionUci = "g5f7",
+                Hint = "A Torre e os peões pretos trancam o próprio Rei. Dê o xeque-mate de Cavalo em f7!"
             },
             new TacticalPuzzle
             {
                 Title = "Puzzle #7: Mate de Anastásia",
                 Theme = "Coordenação Cavalo + Torre",
-                Fen = "5r1k/4N1pp/8/8/8/8/8/6RK w - - 0 1",
-                SolutionUci = "e7g6",
-                Hint = "Ou dê o xeque descoberto ou leve a Torre para a coluna h! (Experimente Cg6+ ou Tg8)"
+                Fen = "5r2/4N1pk/8/8/8/8/5PP1/5KR1 w - - 0 1",
+                SolutionUci = "g1h1",
+                Hint = "O Cavalo em e7 controla g8 e g6 enquanto o peão preto bloqueia g7. Leve a Torre para a coluna h dando mate!"
             },
             new TacticalPuzzle
             {
@@ -140,17 +165,17 @@ namespace XadrezApp
             {
                 Title = "Puzzle #9: Mate de Boden (Dois Bispos)",
                 Theme = "Bispos Cruzados",
-                Fen = "2kr3r/ppp2ppp/8/8/8/5B2/P1P2PPP/2KR2B1 w - - 0 1",
-                SolutionUci = "f3g4",
-                Hint = "Dê o xeque diagonal com o Bispo de casas claras em g4!"
+                Fen = "2kr3r/p2n1ppp/2p5/8/5B2/8/PPP1BPPP/2KR4 w - - 0 1",
+                SolutionUci = "e2a6",
+                Hint = "O Bispo em f4 já corta a fuga por c7 e b8. Dê xeque-mate cruzado com o outro Bispo em a6!"
             },
             new TacticalPuzzle
             {
-                Title = "Puzzle #10: Mate dasombreiras (Epaulette Mate)",
+                Title = "Puzzle #10: Mate das Ombreiras (Epaulette Mate)",
                 Theme = "Rei bloqueado pelas próprias Torres",
-                Fen = "3rkr2/8/4Q3/8/8/8/8/4K3 w - - 0 1",
-                SolutionUci = "e6e7",
-                Hint = "As duas Torres pretas bloqueiam a fuga lateral do próprio Rei! Aproxime a Dama."
+                Fen = "3rkr2/8/8/3N4/1Q6/8/8/4K3 w - - 0 1",
+                SolutionUci = "b4e7",
+                Hint = "As duas Torres pretas bloqueiam a fuga lateral do próprio Rei! Leve a Dama a e7 protegida pelo Cavalo."
             },
             new TacticalPuzzle
             {
@@ -172,17 +197,17 @@ namespace XadrezApp
             {
                 Title = "Puzzle #13: Mate da Ópera de Morphy",
                 Theme = "Mate Clássico com Torre e Bispo",
-                Fen = "4kb1r/p2n1ppp/4q3/4p1B1/4P3/8/PPP2PPP/3RK2R w Kk - 0 1",
+                Fen = "1n2kb1r/p4ppp/4q3/4p1B1/4P3/8/PPP2PPP/2KR3R w k - 0 17",
                 SolutionUci = "d1d8",
-                Hint = "O Bispo em g5 apoia a casa d8 e o Cavalo em d7 bloqueia o próprio Rei!"
+                Hint = "O Bispo em g5 apoia a casa d8 enquanto as peças pretas bloqueiam a fuga do próprio Rei!"
             },
             new TacticalPuzzle
             {
                 Title = "Puzzle #14: Presente Grego (Ataque em h7)",
                 Theme = "Mate com Dama e Cavalo",
-                Fen = "r1bq1rk1/ppp2p1p/2np4/6N1/2B1P3/8/PPPP1PPP/RNB1K2R w KQ - 0 1",
-                SolutionUci = "c4f7",
-                Hint = "Ataque o Rei exposto com o Bispo em f7!"
+                Fen = "r1bq1rk1/ppp2ppp/2np4/4p1NQ/2B1P3/8/PPPP1PPP/RNB1K2R w KQ - 0 1",
+                SolutionUci = "h5h7",
+                Hint = "A Dama em h5 e o Cavalo em g5 convergem sobre h7. Dê xeque-mate em h7 com a Dama!"
             },
             new TacticalPuzzle
             {

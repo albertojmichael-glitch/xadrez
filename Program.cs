@@ -26,14 +26,14 @@ namespace XadrezApp
     // Janela Clássica para escolha de peça na Promoção do Peão
     public static class PromotionDialog
     {
-        public static char AskPiece(bool isWhite)
+        public static char AskPiece(bool isWhite, IWin32Window? owner = null)
         {
             using var form = new Form
             {
                 Text = "Promoção de Peão",
                 ClientSize = new Size(340, 110),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = FormStartPosition.CenterParent,
+                StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ControlBox = false,
@@ -80,7 +80,11 @@ namespace XadrezApp
                 x += 80;
             }
 
-            form.ShowDialog();
+            if (owner != null)
+                form.ShowDialog(owner);
+            else
+                form.ShowDialog();
+
             return isWhite ? char.ToUpper(selected) : char.ToLower(selected);
         }
     }

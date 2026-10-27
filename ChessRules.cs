@@ -9,6 +9,7 @@ namespace XadrezApp
     public class GameSnapshot
     {
         public char[,] Board { get; set; } = new char[8, 8];
+        public byte[,] PieceVariants { get; set; } = new byte[8, 8];
         public bool WhiteTurn { get; set; } = true;
         public bool CastleWK { get; set; } = true;
         public bool CastleWQ { get; set; } = true;
@@ -17,13 +18,21 @@ namespace XadrezApp
         public Point? EnPassantTarget { get; set; } = null;
         public int HalfMoveClock { get; set; } = 0;
         public int FullMoveNumber { get; set; } = 1;
+        public string InitialFen { get; set; } = ChessRules.StandardStartFen;
+        public bool InitialWhiteTurn { get; set; } = true;
+        public int InitialMoveNumber { get; set; } = 1;
+        public string GameResult { get; set; } = "*";
         public List<string> PositionHistory { get; set; } = new List<string>();
-        public List<string>SanMoves { get; set; } = new List<string>();
+        public List<string> SanMoves { get; set; } = new List<string>();
     }
 
     public class ChessRules
     {
+        public const string StandardStartFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
         public char[,] Board { get; private set; } = new char[8, 8];
+        // Identifica qual variante visual (1 ou 2) cada peça usa, acompanhando a peça quando ela se move
+        public byte[,] PieceVariants { get; private set; } = new byte[8, 8];
         public bool WhiteTurn { get; set; } = true;
 
         // Direitos de Roque (Pequeno e Grande)
@@ -39,6 +48,12 @@ namespace XadrezApp
         public int HalfMoveClock { get; set; } = 0;
         public int FullMoveNumber { get; set; } = 1;
 
+        // Metadados de início e resultado da partida para exportação PGN fiel
+        public string InitialFen { get; private set; } = StandardStartFen;
+        public bool InitialWhiteTurn { get; private set; } = true;
+        public int InitialMoveNumber { get; private set; } = 1;
+        public string GameResult { get; set; } = "*";
+
         // Histórico de posições para Repetição de 3 Lances e lances para PGN/Aberturas
         public List<string> PositionHistory { get; private set; } = new List<string>();
         public List<string> SanMoves { get; private set; } = new List<string>();
@@ -50,7 +65,7 @@ namespace XadrezApp
 
         public void Reset()
         {
-            LoadFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+            LoadFen(StandardStartFen);
         }
 
         public GameSnapshot CreateSnapshot()
@@ -58,6 +73,7 @@ namespace XadrezApp
             return new GameSnapshot
             {
                 Board = (char[,])Board.Clone(),
+                PieceVariants = (byte[,])PieceVariants.Clone(),
                 WhiteTurn = WhiteTurn,
                 CastleWK = CastleWK,
                 CastleWQ = CastleWQ,
@@ -66,6 +82,10 @@ namespace XadrezApp
                 EnPassantTarget = EnPassantTarget,
                 HalfMoveClock = HalfMoveClock,
                 FullMoveNumber = FullMoveNumber,
+                InitialFen = InitialFen,
+                InitialWhiteTurn = InitialWhiteTurn,
+                InitialMoveNumber = InitialMoveNumber,
+                GameResult = GameResult,
                 PositionHistory = new List<string>(PositionHistory),
                 SanMoves = new List<string>(SanMoves)
             };
@@ -74,6 +94,7 @@ namespace XadrezApp
         public void RestoreSnapshot(GameSnapshot snap)
         {
             Board = (char[,])snap.Board.Clone();
+            PieceVariants = (byte[,])snap.PieceVariants.Clone();
             WhiteTurn = snap.WhiteTurn;
             CastleWK = snap.CastleWK;
             CastleWQ = snap.CastleWQ;
@@ -82,6 +103,10 @@ namespace XadrezApp
             EnPassantTarget = snap.EnPassantTarget;
             HalfMoveClock = snap.HalfMoveClock;
             FullMoveNumber = snap.FullMoveNumber;
+            InitialFen = snap.InitialFen;
+            InitialWhiteTurn = snap.InitialWhiteTurn;
+            InitialMoveNumber = snap.InitialMoveNumber;
+            GameResult = snap.GameResult;
             PositionHistory = new List<string>(snap.PositionHistory);
             SanMoves = new List<string>(snap.SanMoves);
         }
@@ -104,6 +129,36 @@ namespace XadrezApp
             char upperPiece = char.ToUpper(piece);
             bool isCapture = Board[to.Y, to.X] != '.';
 
+            // Desambiguação SAN (ex.: Nbd2, Rae1, R1e3, Qa1d4) calculada ANTES de alterar o tabuleiro
+            string disambiguation = "";
+            if (upperPiece != 'P' && upperPiece != 'K')
+            {
+                var ambiguousPeers = new List<Point>();
+                for (int r = 0; r < 8; r++)
+                {
+                    for (int c = 0; c < 8; c++)
+                    {
+                        if ((c != from.X || r != from.Y) && Board[r, c] == piece)
+                        {
+                            if (GetLegalMovesForSquare(c, r, isWhite).Contains(to))
+                                ambiguousPeers.Add(new Point(c, r));
+                        }
+                    }
+                }
+
+                if (ambiguousPeers.Count > 0)
+                {
+                    bool sameFile = ambiguousPeers.Any(p => p.X == from.X);
+                    bool sameRank = ambiguousPeers.Any(p => p.Y == from.Y);
+                    if (!sameFile)
+                        disambiguation = ((char)('a' + from.X)).ToString();
+                    else if (!sameRank)
+                        disambiguation = (8 - from.Y).ToString();
+                    else
+                        disambiguation = SquareToAlgebraic(from);
+                }
+            }
+
             // Verifica se é captura En Passant
             bool isEnPassantCapture = (upperPiece == 'P' && EnPassantTarget.HasValue && to == EnPassantTarget.Value && Board[to.Y, to.X] == '.');
             if (isEnPassantCapture)
@@ -111,6 +166,7 @@ namespace XadrezApp
                 isCapture = true;
                 int capturedPawnRow = isWhite ? to.Y + 1 : to.Y - 1;
                 Board[capturedPawnRow, to.X] = '.';
+                PieceVariants[capturedPawnRow, to.X] = 0;
             }
 
             // Verifica se é Roque (Pequeno ou Grande)
@@ -121,19 +177,25 @@ namespace XadrezApp
                 {
                     Board[from.Y, 5] = Board[from.Y, 7];
                     Board[from.Y, 7] = '.';
+                    PieceVariants[from.Y, 5] = PieceVariants[from.Y, 7];
+                    PieceVariants[from.Y, 7] = 0;
                     castlingNotation = "O-O";
                 }
                 else if (to.X == 2) // Roque Grande (O-O-O)
                 {
                     Board[from.Y, 3] = Board[from.Y, 0];
                     Board[from.Y, 0] = '.';
+                    PieceVariants[from.Y, 3] = PieceVariants[from.Y, 0];
+                    PieceVariants[from.Y, 0] = 0;
                     castlingNotation = "O-O-O";
                 }
             }
 
-            // Move a peça principal
+            // Move a peça principal (e sua variante de imagem para nunca trocar de aparência)
             Board[to.Y, to.X] = piece;
             Board[from.Y, from.X] = '.';
+            PieceVariants[to.Y, to.X] = PieceVariants[from.Y, from.X];
+            PieceVariants[from.Y, from.X] = 0;
 
             // Promoção de Peão
             string promoSuffix = "";
@@ -142,6 +204,7 @@ namespace XadrezApp
                 char promoPiece = chosenPromotion ?? (isWhite ? 'Q' : 'q');
                 promoPiece = isWhite ? char.ToUpper(promoPiece) : char.ToLower(promoPiece);
                 Board[to.Y, to.X] = promoPiece;
+                PieceVariants[to.Y, to.X] = 1;
                 promoSuffix = $"={char.ToUpper(promoPiece)}";
             }
 
@@ -170,7 +233,7 @@ namespace XadrezApp
 
             WhiteTurn = !WhiteTurn;
 
-            // Monta notação algébrica (SAN)
+            // Monta notação algébrica (SAN) completa com desambiguação
             string san;
             if (castlingNotation != null)
             {
@@ -180,13 +243,21 @@ namespace XadrezApp
             {
                 string pChar = upperPiece == 'P' ? (isCapture ? ((char)('a' + from.X)).ToString() : "") : upperPiece.ToString();
                 string capStr = isCapture ? "x" : "";
-                san = $"{pChar}{capStr}{SquareToAlgebraic(to)}{promoSuffix}";
+                san = $"{pChar}{disambiguation}{capStr}{SquareToAlgebraic(to)}{promoSuffix}";
             }
 
             if (IsKingInCheck(Board, WhiteTurn))
             {
                 var nextMoves = GetAllLegalMoves(WhiteTurn);
-                san += (nextMoves.Count == 0) ? "#" : "+";
+                if (nextMoves.Count == 0)
+                {
+                    san += "#";
+                    GameResult = WhiteTurn ? "0-1" : "1-0";
+                }
+                else
+                {
+                    san += "+";
+                }
             }
 
             SanMoves.Add(san);
@@ -213,12 +284,14 @@ namespace XadrezApp
             {
                 if (IsKingInCheck(Board, WhiteTurn))
                 {
-                    string winner = WhiteTurn ? "Pretas (Stockfish)" : "Brancas (Você)";
+                    GameResult = WhiteTurn ? "0-1" : "1-0";
+                    string winner = WhiteTurn ? "Pretas (IA)" : "Brancas (Você)";
                     reasonTitle = "Xeque-mate!";
                     reasonDetail = $"Xeque-mate! Vitória de: {winner}";
                 }
                 else
                 {
+                    GameResult = "1/2-1/2";
                     reasonTitle = "Empate por Afogamento";
                     reasonDetail = "Empate! Rei afogado (Stalemate) — nenhum lance legal disponível.";
                 }
@@ -228,6 +301,7 @@ namespace XadrezApp
             // 1. Regra dos 50 movimentos (100 meio-lances)
             if (HalfMoveClock >= 100)
             {
+                GameResult = "1/2-1/2";
                 reasonTitle = "Empate - Regra dos 50 Movimentos";
                 reasonDetail = "Empate automático! Foram feitos 50 lances completos sem captura e sem movimento de peão.";
                 return true;
@@ -238,6 +312,7 @@ namespace XadrezApp
             int repetitions = PositionHistory.Count(k => k == currentKey);
             if (repetitions >= 3)
             {
+                GameResult = "1/2-1/2";
                 reasonTitle = "Empate por Repetição (3 Lances)";
                 reasonDetail = "Empate automático! A mesma posição se repetiu 3 vezes na partida.";
                 return true;
@@ -246,6 +321,7 @@ namespace XadrezApp
             // 3. Insuficiência de Material
             if (IsInsufficientMaterial())
             {
+                GameResult = "1/2-1/2";
                 reasonTitle = "Empate por Insuficiência de Material";
                 reasonDetail = "Empate automático! Nenhum dos lados possui material suficiente para dar xeque-mate.";
                 return true;
@@ -501,79 +577,213 @@ namespace XadrezApp
         }
 
         // Carrega qualquer posição via string FEN (usado nos Puzzles e Importação)
-        public bool LoadFen(string fen)
+        public bool LoadFen(string fen) => TryLoadFen(fen, out _);
+
+        // Valida o FEN por completo ANTES de alterar o estado atual. Em caso de erro,
+        // o tabuleiro não é modificado e 'error' descreve o problema.
+        public bool TryLoadFen(string fen, out string error)
         {
+            error = "";
             try
             {
+                if (string.IsNullOrWhiteSpace(fen)) { error = "FEN vazio."; return false; }
+
                 var parts = fen.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length < 1) return false;
+                if (parts.Length > 6) { error = "FEN com campos demais (máximo 6)."; return false; }
 
                 var rows = parts[0].Split('/');
-                if (rows.Length != 8) return false;
+                if (rows.Length != 8) { error = $"O tabuleiro precisa ter 8 fileiras separadas por '/', mas tem {rows.Length}."; return false; }
 
+                const string validPieces = "pnbrqkPNBRQK";
                 var newBoard = new char[8, 8];
+                int whiteKings = 0, blackKings = 0;
+
                 for (int r = 0; r < 8; r++)
                 {
                     int c = 0;
+                    bool lastWasDigit = false;
                     foreach (char ch in rows[r])
                     {
-                        if (char.IsDigit(ch))
+                        if (ch >= '1' && ch <= '8')
                         {
+                            if (lastWasDigit) { error = $"Fileira {8 - r}: dígitos consecutivos não são permitidos."; return false; }
                             int spaces = ch - '0';
-                            for (int s = 0; s < spaces && c < 8; s++)
+                            if (c + spaces > 8) { error = $"Fileira {8 - r}: soma maior que 8 casas."; return false; }
+                            for (int s = 0; s < spaces; s++)
                                 newBoard[r, c++] = '.';
+                            lastWasDigit = true;
                         }
-                        else if (c < 8)
+                        else if (validPieces.IndexOf(ch) >= 0)
                         {
+                            if (c >= 8) { error = $"Fileira {8 - r}: soma maior que 8 casas."; return false; }
+                            if ((ch == 'P' || ch == 'p') && (r == 0 || r == 7))
+                            {
+                                error = $"Fileira {8 - r}: peões não podem estar na 1ª nem na 8ª fileira.";
+                                return false;
+                            }
+                            if (ch == 'K') whiteKings++;
+                            if (ch == 'k') blackKings++;
                             newBoard[r, c++] = ch;
+                            lastWasDigit = false;
                         }
+                        else
+                        {
+                            error = $"Fileira {8 - r}: caractere inválido '{ch}'.";
+                            return false;
+                        }
+                    }
+                    if (c != 8) { error = $"Fileira {8 - r}: soma das casas é {c}, deveria ser 8."; return false; }
+                }
+
+                if (whiteKings != 1 || blackKings != 1)
+                {
+                    error = $"É necessário exatamente um Rei de cada cor (brancos: {whiteKings}, pretos: {blackKings}).";
+                    return false;
+                }
+
+                bool whiteTurn = true;
+                if (parts.Length >= 2)
+                {
+                    if (parts[1] == "w") whiteTurn = true;
+                    else if (parts[1] == "b") whiteTurn = false;
+                    else { error = $"Lado a jogar inválido '{parts[1]}' (use 'w' ou 'b')."; return false; }
+                }
+
+                string castling = parts.Length >= 3 ? parts[2] : "KQkq";
+                if (castling != "-" && (castling.Any(ch => "KQkq".IndexOf(ch) < 0) || castling.Distinct().Count() != castling.Length))
+                {
+                    error = $"Direitos de roque inválidos '{castling}'.";
+                    return false;
+                }
+
+                Point? epTarget = null;
+                if (parts.Length >= 4 && parts[3] != "-")
+                {
+                    epTarget = AlgebraicToSquare(parts[3]);
+                    int expectedRow = whiteTurn ? 2 : 5; // 6ª fileira se as brancas jogam, 3ª se as pretas jogam
+                    if (parts[3].Length != 2 || !epTarget.HasValue || epTarget.Value.Y != expectedRow)
+                    {
+                        error = $"Casa de en passant inválida '{parts[3]}'.";
+                        return false;
+                    }
+                }
+
+                int halfMove = 0, fullMove = 1;
+                if (parts.Length >= 5 && (!int.TryParse(parts[4], out halfMove) || halfMove < 0))
+                {
+                    error = $"Contador de meio-lances inválido '{parts[4]}'.";
+                    return false;
+                }
+                if (parts.Length >= 6 && (!int.TryParse(parts[5], out fullMove) || fullMove < 1))
+                {
+                    error = $"Número do lance inválido '{parts[5]}'.";
+                    return false;
+                }
+
+                // O lado que NÃO está com a vez não pode estar em xeque (posição ilegal)
+                if (IsKingInCheck(newBoard, !whiteTurn))
+                {
+                    error = whiteTurn
+                        ? "Posição ilegal: o Rei preto está em xeque, mas é a vez das brancas."
+                        : "Posição ilegal: o Rei branco está em xeque, mas é a vez das pretas.";
+                    return false;
+                }
+
+                // Tudo validado: aplica o novo estado e inicializa o mapa fixo de variantes de imagem por peça
+                var newVariants = new byte[8, 8];
+                var pieceSeenCount = new Dictionary<char, int>();
+                for (int r = 0; r < 8; r++)
+                {
+                    for (int c = 0; c < 8; c++)
+                    {
+                        char ch = newBoard[r, c];
+                        if (ch == '.') continue;
+                        int seen = pieceSeenCount.GetValueOrDefault(ch, 0) + 1;
+                        pieceSeenCount[ch] = seen;
+                        newVariants[r, c] = (byte)(seen >= 2 ? 2 : 1);
                     }
                 }
 
                 Board = newBoard;
-                WhiteTurn = parts.Length < 2 || parts[1] == "w";
+                PieceVariants = newVariants;
+                WhiteTurn = whiteTurn;
 
-                string castling = parts.Length >= 3 ? parts[2] : "KQkq";
-                CastleWK = castling.Contains('K');
-                CastleWQ = castling.Contains('Q');
-                CastleBK = castling.Contains('k');
-                CastleBQ = castling.Contains('q');
+                // Só mantém o direito de roque se Rei e Torre estiverem nas casas de origem
+                CastleWK = castling.Contains('K') && newBoard[7, 4] == 'K' && newBoard[7, 7] == 'R';
+                CastleWQ = castling.Contains('Q') && newBoard[7, 4] == 'K' && newBoard[7, 0] == 'R';
+                CastleBK = castling.Contains('k') && newBoard[0, 4] == 'k' && newBoard[0, 7] == 'r';
+                CastleBQ = castling.Contains('q') && newBoard[0, 4] == 'k' && newBoard[0, 0] == 'r';
 
-                EnPassantTarget = parts.Length >= 4 ? AlgebraicToSquare(parts[3]) : null;
-                HalfMoveClock = (parts.Length >= 5 && int.TryParse(parts[4], out int hm)) ? hm : 0;
-                FullMoveNumber = (parts.Length >= 6 && int.TryParse(parts[5], out int fm)) ? fm : 1;
+                EnPassantTarget = epTarget;
+                HalfMoveClock = halfMove;
+                FullMoveNumber = fullMove;
+
+                InitialFen = ToFen();
+                InitialWhiteTurn = whiteTurn;
+                InitialMoveNumber = fullMove;
+                GameResult = "*";
 
                 PositionHistory.Clear();
                 SanMoves.Clear();
                 PositionHistory.Add(GetPositionKey());
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                error = $"FEN inválido: {ex.Message}";
                 return false;
             }
         }
 
-        // Gera arquivo PGN completo da partida para salvar ou copiar
-        public string ToPgn(string result = "*")
+        // Cópia independente do estado (usada pelas tarefas em segundo plano da engine)
+        public ChessRules Clone()
         {
+            var copy = new ChessRules();
+            copy.RestoreSnapshot(CreateSnapshot());
+            return copy;
+        }
+
+        // Gera arquivo PGN completo da partida para salvar ou copiar (com SetUp/FEN, resultado real e engine ativa)
+        public string ToPgn(string? result = null, string? blackPlayerName = null, string? eventName = null)
+        {
+            string finalResult = string.IsNullOrWhiteSpace(result) ? GameResult : result!;
+            string opponent = string.IsNullOrWhiteSpace(blackPlayerName) ? "Engine Tática Interna" : blackPlayerName!;
+            string ev = string.IsNullOrWhiteSpace(eventName) ? $"Partida Clássica vs {opponent}" : eventName!;
+
             var sb = new StringBuilder();
-            sb.AppendLine($"[Event \"Partida Clássica vs Stockfish\"]");
+            sb.AppendLine($"[Event \"{ev}\"]");
             sb.AppendLine($"[Site \"Xadrez Desktop C#\"]");
             sb.AppendLine($"[Date \"{DateTime.Now:yyyy.MM.dd}\"]");
             sb.AppendLine($"[White \"Jogador\"]");
-            sb.AppendLine($"[Black \"Stockfish IA\"]");
-            sb.AppendLine($"[Result \"{result}\"]");
+            sb.AppendLine($"[Black \"{opponent}\"]");
+            sb.AppendLine($"[Result \"{finalResult}\"]");
+            if (InitialFen != StandardStartFen)
+            {
+                sb.AppendLine("[SetUp \"1\"]");
+                sb.AppendLine($"[FEN \"{InitialFen}\"]");
+            }
             sb.AppendLine();
+
+            int moveNo = InitialMoveNumber;
+            bool whiteToPlay = InitialWhiteTurn;
 
             for (int i = 0; i < SanMoves.Count; i++)
             {
-                if (i % 2 == 0)
-                    sb.Append($"{(i / 2) + 1}. {SanMoves[i]} ");
+                if (whiteToPlay)
+                {
+                    sb.Append($"{moveNo}. {SanMoves[i]} ");
+                }
                 else
-                    sb.Append($"{SanMoves[i]} ");
+                {
+                    if (i == 0)
+                        sb.Append($"{moveNo}... {SanMoves[i]} ");
+                    else
+                        sb.Append($"{SanMoves[i]} ");
+                    moveNo++;
+                }
+                whiteToPlay = !whiteToPlay;
             }
-            sb.Append(result);
+            sb.Append(finalResult);
             return sb.ToString().Trim();
         }
     }
