@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace XadrezApp
 {
@@ -16,6 +17,8 @@ namespace XadrezApp
         public bool CastleBK { get; set; } = true;
         public bool CastleBQ { get; set; } = true;
         public Point? EnPassantTarget { get; set; } = null;
+        public Point? LastMoveFrom { get; set; } = null;
+        public Point? LastMoveTo { get; set; } = null;
         public int HalfMoveClock { get; set; } = 0;
         public int FullMoveNumber { get; set; } = 1;
         public string InitialFen { get; set; } = ChessRules.StandardStartFen;
@@ -43,6 +46,10 @@ namespace XadrezApp
 
         // Casa alvo de En Passant
         public Point? EnPassantTarget { get; set; } = null;
+
+        // Casas de origem e destino do último lance executado (para destaque no tabuleiro)
+        public Point? LastMoveFrom { get; set; } = null;
+        public Point? LastMoveTo { get; set; } = null;
 
         // Contadores para Regra dos 50 Lances e Número do Lance
         public int HalfMoveClock { get; set; } = 0;
@@ -80,6 +87,8 @@ namespace XadrezApp
                 CastleBK = CastleBK,
                 CastleBQ = CastleBQ,
                 EnPassantTarget = EnPassantTarget,
+                LastMoveFrom = LastMoveFrom,
+                LastMoveTo = LastMoveTo,
                 HalfMoveClock = HalfMoveClock,
                 FullMoveNumber = FullMoveNumber,
                 InitialFen = InitialFen,
@@ -101,6 +110,8 @@ namespace XadrezApp
             CastleBK = snap.CastleBK;
             CastleBQ = snap.CastleBQ;
             EnPassantTarget = snap.EnPassantTarget;
+            LastMoveFrom = snap.LastMoveFrom;
+            LastMoveTo = snap.LastMoveTo;
             HalfMoveClock = snap.HalfMoveClock;
             FullMoveNumber = snap.FullMoveNumber;
             InitialFen = snap.InitialFen;
@@ -120,6 +131,89 @@ namespace XadrezApp
             int row = 8 - (sq[1] - '0');
             if (col < 0 || col > 7 || row < 0 || row > 7) return null;
             return new Point(col, row);
+        }
+
+        public Point? FindKingSquare(bool whiteKing)
+        {
+            char kingChar = whiteKing ? 'K' : 'k';
+            for (int r = 0; r < 8; r++)
+                for (int c = 0; c < 8; c++)
+                    if (Board[r, c] == kingChar)
+                        return new Point(c, r);
+            return null;
+        }
+
+        public Point? GetCheckedKingSquare()
+        {
+            if (IsKingInCheck(Board, true))
+                return FindKingSquare(true);
+            if (IsKingInCheck(Board, false))
+                return FindKingSquare(false);
+            return null;
+        }
+
+        public bool IsCaptureDestination(Point? from, Point to)
+        {
+            if (Board[to.Y, to.X] != '.')
+                return true;
+            if (from.HasValue)
+            {
+                char moving = Board[from.Value.Y, from.Value.X];
+                if (char.ToUpper(moving) == 'P' && EnPassantTarget.HasValue && EnPassantTarget.Value == to)
+                    return true;
+            }
+            return false;
+        }
+
+        // Calcula as peças capturadas por cada lado e a diferença de material em peões (positiva para Brancas)
+        public (List<char> capturedByWhite, List<char> capturedByBlack, int materialDiffWhite) GetCapturedPiecesAndMaterial()
+        {
+            int wQ = 0, wR = 0, wB = 0, wN = 0, wP = 0;
+            int bQ = 0, bR = 0, bB = 0, bN = 0, bP = 0;
+
+            for (int r = 0; r < 8; r++)
+            {
+                for (int c = 0; c < 8; c++)
+                {
+                    switch (Board[r, c])
+                    {
+                        case 'Q': wQ++; break;
+                        case 'R': wR++; break;
+                        case 'B': wB++; break;
+                        case 'N': wN++; break;
+                        case 'P': wP++; break;
+                        case 'q': bQ++; break;
+                        case 'r': bR++; break;
+                        case 'b': bB++; break;
+                        case 'n': bN++; break;
+                        case 'p': bP++; break;
+                    }
+                }
+            }
+
+            int wPromos = Math.Max(0, wQ - 1) + Math.Max(0, wR - 2) + Math.Max(0, wB - 2) + Math.Max(0, wN - 2);
+            int bPromos = Math.Max(0, bQ - 1) + Math.Max(0, bR - 2) + Math.Max(0, bB - 2) + Math.Max(0, bN - 2);
+
+            // Peças pretas capturadas pelas Brancas
+            var capturedByWhite = new List<char>();
+            for (int i = 0; i < Math.Max(0, 1 - bQ); i++) capturedByWhite.Add('q');
+            for (int i = 0; i < Math.Max(0, 2 - bR); i++) capturedByWhite.Add('r');
+            for (int i = 0; i < Math.Max(0, 2 - bB); i++) capturedByWhite.Add('b');
+            for (int i = 0; i < Math.Max(0, 2 - bN); i++) capturedByWhite.Add('n');
+            for (int i = 0; i < Math.Max(0, 8 - bP - bPromos); i++) capturedByWhite.Add('p');
+
+            // Peças brancas capturadas pelas Pretas
+            var capturedByBlack = new List<char>();
+            for (int i = 0; i < Math.Max(0, 1 - wQ); i++) capturedByBlack.Add('Q');
+            for (int i = 0; i < Math.Max(0, 2 - wR); i++) capturedByBlack.Add('R');
+            for (int i = 0; i < Math.Max(0, 2 - wB); i++) capturedByBlack.Add('B');
+            for (int i = 0; i < Math.Max(0, 2 - wN); i++) capturedByBlack.Add('N');
+            for (int i = 0; i < Math.Max(0, 8 - wP - wPromos); i++) capturedByBlack.Add('P');
+
+            int whitePoints = wQ * 9 + wR * 5 + wB * 3 + wN * 3 + wP;
+            int blackPoints = bQ * 9 + bR * 5 + bB * 3 + bN * 3 + bP;
+
+            return (capturedByWhite, capturedByBlack, whitePoints - blackPoints);
         }
 
         public string ExecuteMove(Point from, Point to, char? chosenPromotion = null)
@@ -196,6 +290,9 @@ namespace XadrezApp
             Board[from.Y, from.X] = '.';
             PieceVariants[to.Y, to.X] = PieceVariants[from.Y, from.X];
             PieceVariants[from.Y, from.X] = 0;
+
+            LastMoveFrom = from;
+            LastMoveTo = to;
 
             // Promoção de Peão
             string promoSuffix = "";
@@ -285,7 +382,7 @@ namespace XadrezApp
                 if (IsKingInCheck(Board, WhiteTurn))
                 {
                     GameResult = WhiteTurn ? "0-1" : "1-0";
-                    string winner = WhiteTurn ? "Pretas (IA)" : "Brancas (Você)";
+                    string winner = WhiteTurn ? "Pretas" : "Brancas";
                     reasonTitle = "Xeque-mate!";
                     reasonDetail = $"Xeque-mate! Vitória de: {winner}";
                 }
@@ -715,6 +812,8 @@ namespace XadrezApp
                 CastleBQ = castling.Contains('q') && newBoard[0, 4] == 'k' && newBoard[0, 0] == 'r';
 
                 EnPassantTarget = epTarget;
+                LastMoveFrom = null;
+                LastMoveTo = null;
                 HalfMoveClock = halfMove;
                 FullMoveNumber = fullMove;
 
@@ -744,9 +843,10 @@ namespace XadrezApp
         }
 
         // Gera arquivo PGN completo da partida para salvar ou copiar (com SetUp/FEN, resultado real e engine ativa)
-        public string ToPgn(string? result = null, string? blackPlayerName = null, string? eventName = null)
+        public string ToPgn(string? result = null, string? blackPlayerName = null, string? eventName = null, string? whitePlayerName = null)
         {
             string finalResult = string.IsNullOrWhiteSpace(result) ? GameResult : result!;
+            string whiteName = string.IsNullOrWhiteSpace(whitePlayerName) ? "Jogador" : whitePlayerName!;
             string opponent = string.IsNullOrWhiteSpace(blackPlayerName) ? "Engine Tática Interna" : blackPlayerName!;
             string ev = string.IsNullOrWhiteSpace(eventName) ? $"Partida Clássica vs {opponent}" : eventName!;
 
@@ -754,7 +854,7 @@ namespace XadrezApp
             sb.AppendLine($"[Event \"{ev}\"]");
             sb.AppendLine($"[Site \"Xadrez Desktop C#\"]");
             sb.AppendLine($"[Date \"{DateTime.Now:yyyy.MM.dd}\"]");
-            sb.AppendLine($"[White \"Jogador\"]");
+            sb.AppendLine($"[White \"{whiteName}\"]");
             sb.AppendLine($"[Black \"{opponent}\"]");
             sb.AppendLine($"[Result \"{finalResult}\"]");
             if (InitialFen != StandardStartFen)
@@ -784,6 +884,290 @@ namespace XadrezApp
                 whiteToPlay = !whiteToPlay;
             }
             sb.Append(finalResult);
+            return sb.ToString().Trim();
+        }
+
+        // Resolve um lance em notação SAN (ex.: "Nf3", "exd5", "O-O", "e8=Q+", "Cbd7") ou UCI ("e2e4") na posição atual
+        public bool TryParseSanMove(string rawMoveToken, out Point from, out Point to, out char? promo)
+        {
+            from = default;
+            to = default;
+            promo = null;
+
+            if (string.IsNullOrWhiteSpace(rawMoveToken))
+                return false;
+
+            string token = rawMoveToken.Trim().TrimEnd('+', '#', '!', '?');
+            if (string.IsNullOrEmpty(token))
+                return false;
+
+            // Normaliza roques escritos com zeros (0-0 / 0-0-0)
+            if (token is "0-0" or "O-O" or "o-o") token = "O-O";
+            else if (token is "0-0-0" or "O-O-O" or "o-o-o") token = "O-O-O";
+
+            // Suporta letras de peças em português (C=N, B=B, T=R, D=Q, R=K) se o primeiro caractere for maiúsculo
+            if (token.Length >= 3 && token != "O-O" && token != "O-O-O")
+            {
+                char first = token[0];
+                char mapped = first switch
+                {
+                    'C' => 'N',
+                    'T' => 'R',
+                    'D' => 'Q',
+                    _ => first
+                };
+                if (mapped != first)
+                    token = mapped + token[1..];
+            }
+
+            var legalMoves = GetAllLegalMoves(WhiteTurn);
+
+            // 1. Verifica formato UCI direto (ex.: e2e4, e7e8q, e2-e4)
+            string cleanUci = token.Replace("-", "");
+            if (cleanUci.Length is 4 or 5 &&
+                cleanUci[0] is >= 'a' and <= 'h' &&
+                cleanUci[1] is >= '1' and <= '8' &&
+                cleanUci[2] is >= 'a' and <= 'h' &&
+                cleanUci[3] is >= '1' and <= '8')
+            {
+                var uFrom = AlgebraicToSquare(cleanUci[..2]);
+                var uTo = AlgebraicToSquare(cleanUci.Substring(2, 2));
+                if (uFrom.HasValue && uTo.HasValue && legalMoves.Contains((uFrom.Value, uTo.Value)))
+                {
+                    from = uFrom.Value;
+                    to = uTo.Value;
+                    if (cleanUci.Length == 5 && "qrbnQRBN".IndexOf(cleanUci[4]) >= 0)
+                        promo = WhiteTurn ? char.ToUpper(cleanUci[4]) : char.ToLower(cleanUci[4]);
+                    return true;
+                }
+            }
+
+            // 2. Compara com o SAN exato gerado por cada lance legal na posição atual
+            char[] promoOptions = { 'Q', 'R', 'B', 'N' };
+            foreach (var mv in legalMoves)
+            {
+                char movingPiece = Board[mv.from.Y, mv.from.X];
+                bool isPromo = char.ToUpper(movingPiece) == 'P' && (mv.to.Y == 0 || mv.to.Y == 7);
+
+                if (isPromo)
+                {
+                    foreach (char pOpt in promoOptions)
+                    {
+                        var probe = Clone();
+                        string generatedSan = probe.ExecuteMove(mv.from, mv.to, pOpt).TrimEnd('+', '#');
+                        string generatedNoEq = generatedSan.Replace("=", "");
+                        if (string.Equals(generatedSan, token, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(generatedNoEq, token, StringComparison.OrdinalIgnoreCase))
+                        {
+                            from = mv.from;
+                            to = mv.to;
+                            promo = WhiteTurn ? char.ToUpper(pOpt) : char.ToLower(pOpt);
+                            return true;
+                        }
+                    }
+                }
+                else
+                {
+                    var probe = Clone();
+                    string generatedSan = probe.ExecuteMove(mv.from, mv.to).TrimEnd('+', '#');
+                    string generatedNoCapture = generatedSan.Replace("x", "");
+                    string tokenNoCapture = token.Replace("x", "");
+                    if (string.Equals(generatedSan, token, StringComparison.Ordinal) ||
+                        string.Equals(generatedNoCapture, tokenNoCapture, StringComparison.Ordinal))
+                    {
+                        from = mv.from;
+                        to = mv.to;
+                        promo = null;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // Importa um texto PGN completo, validando cada lance e devolvendo os snapshots de todos os meio-lances
+        public bool TryLoadPgn(
+            string pgnText,
+            out List<GameSnapshot> plySnapshots,
+            out Dictionary<string, string> headers,
+            out string error)
+        {
+            plySnapshots = new List<GameSnapshot>();
+            headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            error = "";
+
+            if (string.IsNullOrWhiteSpace(pgnText))
+            {
+                error = "O texto PGN está vazio.";
+                return false;
+            }
+
+            try
+            {
+                var lines = pgnText.Replace("\r\n", "\n").Split('\n');
+                var moveTextBuilder = new StringBuilder();
+                var tagRegex = new Regex(@"^\s*\[\s*([A-Za-z0-9_]+)\s+""([^""]*)""\s*\]\s*$");
+
+                foreach (string rawLine in lines)
+                {
+                    string line = rawLine.Trim();
+                    if (string.IsNullOrEmpty(line) || line.StartsWith('%'))
+                        continue;
+
+                    var match = tagRegex.Match(line);
+                    if (match.Success)
+                    {
+                        headers[match.Groups[1].Value] = match.Groups[2].Value;
+                    }
+                    else
+                    {
+                        int semiIdx = line.IndexOf(';');
+                        if (semiIdx >= 0)
+                            line = line[..semiIdx];
+                        moveTextBuilder.Append(line).Append(' ');
+                    }
+                }
+
+                var probe = new ChessRules();
+                if (headers.TryGetValue("FEN", out string? customFen) && !string.IsNullOrWhiteSpace(customFen))
+                {
+                    if (!probe.TryLoadFen(customFen, out string fenErr))
+                    {
+                        error = $"FEN inicial do PGN é inválido: {fenErr}";
+                        return false;
+                    }
+                }
+
+                // Remove comentários {...} e variantes (...) recursivamente
+                string moveText = StripPgnCommentsAndVariations(moveTextBuilder.ToString());
+                plySnapshots.Add(probe.CreateSnapshot());
+
+                var tokens = moveText.Split(new[] { ' ', '\t', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string rawTok in tokens)
+                {
+                    string tok = rawTok.Trim();
+                    if (string.IsNullOrEmpty(tok)) continue;
+
+                    // Ignora resultados finais
+                    if (tok is "1-0" or "0-1" or "1/2-1/2" or "*")
+                    {
+                        probe.GameResult = tok;
+                        break;
+                    }
+
+                    // Ignora NAGs ($1, $2...)
+                    if (tok.StartsWith('$')) continue;
+
+                    // Remove prefixo de número de lance (ex.: "1.e4" -> "e4", "12...Nf6" -> "Nf6", "1." -> "")
+                    int lastDot = tok.LastIndexOf('.');
+                    if (lastDot >= 0)
+                    {
+                        tok = tok[(lastDot + 1)..].Trim();
+                        if (string.IsNullOrEmpty(tok)) continue;
+                    }
+
+                    // Se for apenas número puro, ignora
+                    if (int.TryParse(tok, out _)) continue;
+
+                    if (!probe.TryParseSanMove(tok, out Point from, out Point to, out char? promo))
+                    {
+                        error = $"Lance inválido ou irreconhecível no PGN: \"{tok}\" (lance {probe.FullMoveNumber}).";
+                        return false;
+                    }
+
+                    probe.ExecuteMove(from, to, promo);
+                    plySnapshots.Add(probe.CreateSnapshot());
+                }
+
+                if (headers.TryGetValue("Result", out string? hdrResult) &&
+                    hdrResult is "1-0" or "0-1" or "1/2-1/2" &&
+                    probe.GameResult == "*")
+                {
+                    probe.GameResult = hdrResult;
+                    if (plySnapshots.Count > 0)
+                        plySnapshots[^1].GameResult = hdrResult;
+                }
+
+                RestoreSnapshot(probe.CreateSnapshot());
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = $"Erro ao interpretar PGN: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static string StripPgnCommentsAndVariations(string text)
+        {
+            var sb = new StringBuilder(text.Length);
+            int braceDepth = 0;
+            int parenDepth = 0;
+
+            foreach (char ch in text)
+            {
+                if (braceDepth > 0)
+                {
+                    if (ch == '}') braceDepth--;
+                    continue;
+                }
+                if (ch == '{')
+                {
+                    braceDepth++;
+                    continue;
+                }
+                if (ch == '(')
+                {
+                    parenDepth++;
+                    continue;
+                }
+                if (ch == ')')
+                {
+                    if (parenDepth > 0) parenDepth--;
+                    continue;
+                }
+                if (parenDepth == 0)
+                    sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+
+        // Converte uma linha principal (PV) em UCI ("e2e4 e7e5 g1f3") para notação SAN legível ("1. e4 e5 2. Nf3")
+        public static string FormatUciPvToSan(ChessRules startPosition, string uciPv, int maxPlies = 8)
+        {
+            if (string.IsNullOrWhiteSpace(uciPv)) return "";
+
+            var probe = startPosition.Clone();
+            var tokens = uciPv.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var sb = new StringBuilder();
+            int plies = 0;
+            bool firstToken = true;
+
+            foreach (string raw in tokens)
+            {
+                if (plies >= maxPlies) break;
+                if (!probe.TryParseSanMove(raw, out Point from, out Point to, out char? promo))
+                {
+                    if (firstToken) return uciPv;
+                    break;
+                }
+
+                bool whiteMoving = probe.WhiteTurn;
+                int moveNum = probe.FullMoveNumber;
+                string san = probe.ExecuteMove(from, to, promo);
+
+                if (whiteMoving)
+                    sb.Append($"{moveNum}. {san} ");
+                else if (firstToken)
+                    sb.Append($"{moveNum}... {san} ");
+                else
+                    sb.Append($"{san} ");
+
+                firstToken = false;
+                plies++;
+            }
+
             return sb.ToString().Trim();
         }
     }

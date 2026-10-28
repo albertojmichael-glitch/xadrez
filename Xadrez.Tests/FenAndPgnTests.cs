@@ -91,5 +91,53 @@ namespace XadrezApp.Tests
             Assert.Contains($"[FEN \"{customFen}\"]", pgn);
             Assert.Contains("5... Kd8 *", pgn);
         }
+
+        [Fact]
+        public void TryLoadPgn_ShouldParseHeadersCommentsAndReplayAllSnapshots()
+        {
+            var rules = new ChessRules();
+            string pgn = @"
+[Event ""Partida de Teste""]
+[White ""Ana""]
+[Black ""Bot""]
+[Result ""1-0""]
+
+1. e4 {Abertura do Peão do Rei} e5 2. Nf3 (2. Bc4 Bc5) Nc6 3. Bb5 a6 1-0";
+
+            bool ok = rules.TryLoadPgn(pgn, out var snapshots, out var headers, out string error);
+
+            Assert.True(ok, error);
+            Assert.Equal("Ana", headers["White"]);
+            Assert.Equal("Bot", headers["Black"]);
+            Assert.Equal(7, snapshots.Count); // Posição inicial + 6 meio-lances
+            Assert.Equal(6, rules.SanMoves.Count);
+            Assert.Equal("1-0", rules.GameResult);
+            Assert.Equal(new Point(0, 1), rules.LastMoveFrom);
+            Assert.Equal(new Point(0, 2), rules.LastMoveTo);
+        }
+
+        [Fact]
+        public void FormatUciPvToSan_ShouldConvertUciSequenceToReadableSan()
+        {
+            var rules = new ChessRules();
+            string sanPv = ChessRules.FormatUciPvToSan(rules, "e2e4 e7e5 g1f3 b8c6");
+
+            Assert.Equal("1. e4 e5 2. Nf3 Nc6", sanPv);
+        }
+
+        [Fact]
+        public void GetCapturedPiecesAndMaterial_ShouldTrackCapturesAndAdvantage()
+        {
+            var rules = new ChessRules();
+            // Sem a Dama preta e um peão preto
+            rules.LoadFen("rnb1kbnr/pppp1ppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+
+            var (capturedByWhite, capturedByBlack, diffWhite) = rules.GetCapturedPiecesAndMaterial();
+
+            Assert.Contains('q', capturedByWhite);
+            Assert.Contains('p', capturedByWhite);
+            Assert.Empty(capturedByBlack);
+            Assert.Equal(10, diffWhite);
+        }
     }
 }

@@ -13,11 +13,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Alberto\\Desktop\\xadrez\\xadrez\\Xadrez.csproj",
+      "projectUniqueName": "C:\\Users\\Alberto\\Desktop\\villasboas\\xadrez\\Xadrez.csproj",
       "projectName": "Xadrez",
-      "projectPath": "C:\\Users\\Alberto\\Desktop\\xadrez\\xadrez\\Xadrez.csproj",
+      "projectPath": "C:\\Users\\Alberto\\Desktop\\villasboas\\xadrez\\Xadrez.csproj",
       "packagesPath": "C:\\Users\\Alberto\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Alberto\\Desktop\\xadrez\\xadrez\\obj\\",
+      "outputPath": "C:\\Users\\Alberto\\Desktop\\villasboas\\xadrez\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Alberto\\AppData\\Roaming\\NuGet\\NuGet.Config"
@@ -26,7 +26,7 @@
         "net8.0-windows"
       ],
       "sources": {
-        "https://api.nuget.org/v3/index.json": {}
+        "C:\\Users\\Alberto\\.nuget\\packages": {}
       },
       "frameworks": {
         "net8.0-windows7.0": {
