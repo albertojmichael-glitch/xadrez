@@ -14,6 +14,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Xadrez.csproj" />
+    <ProjectReference Include="..\Xadrez.csproj" />
   </ItemGroup>
 </Project>
