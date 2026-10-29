@@ -341,9 +341,9 @@ namespace XadrezApp
             {
                 Title = "Puzzle #20: O Beijo da Morte (Dama + Rei)",
                 Theme = "Mate de Dama Apoiada pelo Rei",
-                Fen = "7k/8/6K1/8/8/8/1Q6/8 w - - 0 1",
-                SolutionUci = "b2g7",
-                Hint = "Seu Rei em g6 está em oposição próxima ao Rei adversário. Leve a Dama até g7 para o mate!"
+                Fen = "7k/8/5K2/8/8/8/6Q1/8 w - - 0 1",
+                SolutionUci = "g2g7",
+                Hint = "Seu Rei em f6 apoia a casa g7 ao lado do Rei adversário. Leve a Dama até g7 para o mate!"
             },
             new TacticalPuzzle
             {
@@ -373,8 +373,8 @@ namespace XadrezApp
             {
                 Title = "Puzzle #24: Mate Sufocado de Pretas",
                 Theme = "Pretas Jogam: Mate de Cavalo",
-                Fen = "6k1/8/8/8/5n2/8/6PP/6RK b - - 0 1",
-                SolutionUci = "f4f2",
+                Fen = "6k1/8/8/8/8/7n/6PP/6RK b - - 0 1",
+                SolutionUci = "h3f2",
                 Hint = "Você está de Pretas! O Rei branco em h1 está trancado pela própria Torre e peões. Jogue Cf2#!"
             },
             new TacticalPuzzle
@@ -389,8 +389,8 @@ namespace XadrezApp
             {
                 Title = "Puzzle #26: Mate de Damiano Clássico",
                 Theme = "Ataque Mortal na Coluna h",
-                Fen = "6rk/5p2/5P2/4Q3/8/8/6PP/6K1 w - - 0 1",
-                SolutionUci = "e5h5",
+                Fen = "6rk/5p2/5P2/3Q4/8/8/6PP/6K1 w - - 0 1",
+                SolutionUci = "d5h5",
                 Hint = "A Torre preta em g8 bloqueia a fuga do próprio Rei e seu peão em f6 controla g7. Leve a Dama para h5!"
             },
             new TacticalPuzzle
