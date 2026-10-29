@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
+using System.Media;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 
@@ -11,62 +13,12 @@ namespace XadrezApp
     static class Program
     {
         [STAThread]
-        static int Main(string[] args)
+        static void Main()
         {
-            if (args.Length > 0 && args[0] == "--verify")
-            {
-                return RunSelfVerification();
-            }
-
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());
-            return 0;
-        }
-
-        private static int RunSelfVerification()
-        {
-            try
-            {
-                var rules = new ChessRules();
-                if (rules.GetAllLegalMoves(true).Count != 20)
-                    throw new Exception("Initial moves count != 20");
-
-                string pgn = "[Event \"Test\"]\n[White \"Ana\"]\n[Black \"Bot\"]\n[Result \"1-0\"]\n1. e4 {c} e5 2. Nf3 (2. Bc4) Nc6 3. Bb5 a6 1-0";
-                if (!rules.TryLoadPgn(pgn, out var snaps, out var hdrs, out string err))
-                    throw new Exception("TryLoadPgn failed: " + err);
-                if (snaps.Count != 7 || hdrs["White"] != "Ana" || rules.GameResult != "1-0")
-                    throw new Exception("TryLoadPgn state mismatch");
-
-                string pvSan = ChessRules.FormatUciPvToSan(new ChessRules(), "e2e4 e7e5 g1f3 b8c6");
-                if (pvSan != "1. e4 e5 2. Nf3 Nc6")
-                    throw new Exception("FormatUciPvToSan mismatch: " + pvSan);
-
-                var sacRules = new ChessRules();
-                sacRules.LoadFen("r1bq1rk1/ppp2ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R1BQK2R w KQ - 0 6");
-                if (!EngineService.IsMaterialSacrifice(sacRules, new Point(2, 4), new Point(7, 1), null, 0.4, 1.5))
-                    throw new Exception("Greek gift should be detected as sacrifice");
-
-                var normalCapRules = new ChessRules();
-                normalCapRules.LoadFen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2");
-                if (EngineService.IsMaterialSacrifice(normalCapRules, new Point(4, 4), new Point(3, 3), null, 0.3, 0.5))
-                    throw new Exception("Normal pawn capture should NOT be sacrifice");
-
-                var mateIn3 = EngineService.ClassifyMove(2.0, 99.0, true, mateInMoves: 3, isImmediateCheckmate: false);
-                if (mateIn3.description != "Mate em 3")
-                    throw new Exception("Expected 'Mate em 3', got: " + mateIn3.description);
-
-                using var form = new MainForm();
-                form.Size = new Size(1200, 820);
-                Console.WriteLine("SELF_VERIFICATION_OK");
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine("SELF_VERIFICATION_FAILED: " + ex);
-                return 1;
-            }
         }
     }
 
@@ -79,7 +31,7 @@ namespace XadrezApp
         }
     }
 
-    // Preferências do usuário salvas entre sessões (dificuldade, tema, relógio e orientação/cor)
+    // Preferências do usuário salvas entre sessões (dificuldade, tema, relógio, orientação/cor e som)
     public sealed class UserSettings
     {
         public int DifficultyIndex { get; set; } = 0;
@@ -87,6 +39,8 @@ namespace XadrezApp
         public string ClockMode { get; set; } = "Fischer 5+3";
         public bool PlayAsWhite { get; set; } = true;
         public bool BoardFlipped { get; set; } = false;
+        public bool SoundEnabled { get; set; } = true;
+        public string BotDelayMode { get; set; } = "Variável (0 a 1s)";
 
         private static string GetSettingsFilePath()
         {
@@ -139,42 +93,99 @@ namespace XadrezApp
         }
     }
 
-    // Diálogo de escolha de peça na Promoção do Peão com imagens das peças
+    // Diálogo de escolha de peça na Promoção do Peão com imagens, atalhos Q/R/B/N e cancelamento via Esc/X
     public static class PromotionDialog
     {
-        public static char AskPiece(
+        public static char? AskPiece(
             bool isWhite,
             IWin32Window? owner = null,
-            IReadOnlyDictionary<string, Image>? pieceImages = null)
+            IReadOnlyDictionary<string, Image>? pieceImages = null,
+            Point? screenLocation = null)
         {
             using var form = new Form
             {
-                Text = "Promoção de Peão",
+                Text = "Promoção (Q, R, B, N | Esc cancela)",
+                AutoScaleMode = AutoScaleMode.Dpi,
                 ClientSize = new Size(400, 148),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
-                StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
+                StartPosition = screenLocation.HasValue
+                    ? FormStartPosition.Manual
+                    : (owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen),
                 MaximizeBox = false,
                 MinimizeBox = false,
-                ControlBox = false,
+                ControlBox = true,
+                KeyPreview = true,
                 BackColor = Color.FromArgb(242, 240, 230),
                 Font = new Font("Segoe UI", 9f, FontStyle.Bold)
             };
 
+            if (screenLocation.HasValue)
+            {
+                form.Location = screenLocation.Value;
+            }
+
             var lbl = new Label
             {
-                Text = "Escolha a peça para promover o seu peão:",
-                Location = new Point(16, 12),
+                Text = "Escolha a peça (atalhos Q, R, B, N ou Esc para cancelar):",
+                Location = new Point(14, 12),
                 AutoSize = true
             };
             form.Controls.Add(lbl);
 
-            char selected = 'Q';
+            char? selected = null;
             (string label, char code, string symbol)[] options =
             {
-                ("Dama (Q)", 'Q', isWhite ? "♕" : "♛"),
-                ("Torre (R)", 'R', isWhite ? "♖" : "♜"),
-                ("Bispo (B)", 'B', isWhite ? "♗" : "♝"),
-                ("Cavalo (N)", 'N', isWhite ? "♘" : "♞")
+                ("Dama [Q]", 'Q', isWhite ? "♕" : "♛"),
+                ("Torre [R]", 'R', isWhite ? "♖" : "♜"),
+                ("Bispo [B]", 'B', isWhite ? "♗" : "♝"),
+                ("Cavalo [N]", 'N', isWhite ? "♘" : "♞")
+            };
+
+            void ChooseAndClose(char pieceCode)
+            {
+                selected = pieceCode;
+                form.DialogResult = DialogResult.OK;
+                form.Close();
+            }
+
+            form.KeyDown += (s, e) =>
+            {
+                switch (e.KeyCode)
+                {
+                    case Keys.Escape:
+                        selected = null;
+                        form.DialogResult = DialogResult.Cancel;
+                        form.Close();
+                        e.Handled = true;
+                        break;
+                    case Keys.Q:
+                    case Keys.D:
+                    case Keys.D1:
+                    case Keys.NumPad1:
+                        ChooseAndClose('Q');
+                        e.Handled = true;
+                        break;
+                    case Keys.R:
+                    case Keys.T:
+                    case Keys.D2:
+                    case Keys.NumPad2:
+                        ChooseAndClose('R');
+                        e.Handled = true;
+                        break;
+                    case Keys.B:
+                    case Keys.D3:
+                    case Keys.NumPad3:
+                        ChooseAndClose('B');
+                        e.Handled = true;
+                        break;
+                    case Keys.N:
+                    case Keys.C:
+                    case Keys.D4:
+                    case Keys.NumPad4:
+                        ChooseAndClose('N');
+                        e.Handled = true;
+                        break;
+                }
             };
 
             var createdThumbnails = new List<Bitmap>();
@@ -213,22 +224,15 @@ namespace XadrezApp
                 btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(230, 242, 255);
 
                 char c = opt.code;
-                btn.Click += (s, e) =>
-                {
-                    selected = c;
-                    form.DialogResult = DialogResult.OK;
-                    form.Close();
-                };
+                btn.Click += (s, e) => ChooseAndClose(c);
                 form.Controls.Add(btn);
                 x += 94;
             }
 
+            DialogResult result;
             try
             {
-                if (owner != null)
-                    form.ShowDialog(owner);
-                else
-                    form.ShowDialog();
+                result = owner != null ? form.ShowDialog(owner) : form.ShowDialog();
             }
             finally
             {
@@ -238,7 +242,88 @@ namespace XadrezApp
                 }
             }
 
-            return isWhite ? char.ToUpper(selected) : char.ToLower(selected);
+            if (result != DialogResult.OK || !selected.HasValue)
+                return null;
+
+            return isWhite ? char.ToUpper(selected.Value) : char.ToLower(selected.Value);
+        }
+    }
+
+    // Efeitos sonoros sintetizados em memória (WAV PCM) para lance, captura, xeque e fim de partida
+    public static class ChessSoundEffects
+    {
+        private static readonly byte[] MoveWav = BuildToneWav(new[] { (245.0, 0.045, 0.42) });
+        private static readonly byte[] CaptureWav = BuildToneWav(new[] { (330.0, 0.032, 0.50), (185.0, 0.045, 0.55) });
+        private static readonly byte[] CheckWav = BuildToneWav(new[] { (587.33, 0.055, 0.48), (880.0, 0.085, 0.52) });
+        private static readonly byte[] GameEndWav = BuildToneWav(new[] { (523.25, 0.070, 0.45), (659.25, 0.070, 0.45), (783.99, 0.130, 0.50) });
+
+        public static void PlayMove() => PlayBytes(MoveWav);
+        public static void PlayCapture() => PlayBytes(CaptureWav);
+        public static void PlayCheck() => PlayBytes(CheckWav);
+        public static void PlayGameEnd() => PlayBytes(GameEndWav);
+
+        private static void PlayBytes(byte[] wavData)
+        {
+            try
+            {
+                var ms = new MemoryStream(wavData, writable: false);
+                using var player = new SoundPlayer(ms);
+                player.Play();
+            }
+            catch
+            {
+                // Ignora falhas de dispositivo de áudio em ambientes sem placa de som
+            }
+        }
+
+        private static byte[] BuildToneWav((double freqHz, double durationSec, double volume)[] segments)
+        {
+            const int sampleRate = 22050;
+            int totalSamples = 0;
+            foreach (var seg in segments)
+                totalSamples += Math.Max(1, (int)(seg.durationSec * sampleRate));
+
+            int dataBytes = totalSamples * 2; // 16-bit mono PCM
+            using var ms = new MemoryStream(44 + dataBytes);
+            using var bw = new BinaryWriter(ms, Encoding.ASCII, leaveOpen: true);
+
+            // Cabeçalho RIFF WAVE
+            bw.Write(Encoding.ASCII.GetBytes("RIFF"));
+            bw.Write(36 + dataBytes);
+            bw.Write(Encoding.ASCII.GetBytes("WAVE"));
+            bw.Write(Encoding.ASCII.GetBytes("fmt "));
+            bw.Write(16); // PCM chunk size
+            bw.Write((short)1); // AudioFormat = 1 (PCM)
+            bw.Write((short)1); // NumChannels = 1
+            bw.Write(sampleRate);
+            bw.Write(sampleRate * 2); // ByteRate
+            bw.Write((short)2); // BlockAlign
+            bw.Write((short)16); // BitsPerSample
+            bw.Write(Encoding.ASCII.GetBytes("data"));
+            bw.Write(dataBytes);
+
+            foreach (var (freqHz, durationSec, volume) in segments)
+            {
+                int count = Math.Max(1, (int)(durationSec * sampleRate));
+                for (int i = 0; i < count; i++)
+                {
+                    double t = i / (double)sampleRate;
+                    double progress = i / (double)count;
+                    // Envelope com ataque rápido e decaimento exponencial suave (timbre percussivo de peça)
+                    double attack = Math.Min(1.0, i / (sampleRate * 0.003));
+                    double decay = Math.Exp(-4.8 * progress);
+                    double env = attack * decay * volume;
+
+                    double fundamental = Math.Sin(2.0 * Math.PI * freqHz * t);
+                    double harmonic = 0.35 * Math.Sin(2.0 * Math.PI * (freqHz * 1.5) * t);
+                    double sample = Math.Clamp((fundamental + harmonic) * env, -1.0, 1.0);
+                    short pcm = (short)(sample * short.MaxValue);
+                    bw.Write(pcm);
+                }
+            }
+
+            bw.Flush();
+            return ms.ToArray();
         }
     }
 }

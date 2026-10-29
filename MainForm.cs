@@ -16,9 +16,9 @@ namespace XadrezApp
     public class MainForm : Form
     {
         private int squareSize = 62;
-        private int boardOriginX = 24;
-        private int boardOriginY = 24;
-        private const int CoordMargin = 22;
+        private int boardOriginX = 8;
+        private int boardOriginY = 8;
+        private const int CoordMargin = 6;
 
         private readonly ChessRules rules = new ChessRules();
         private readonly ChessRules reviewRules = new ChessRules();
@@ -91,13 +91,47 @@ namespace XadrezApp
 
         // Estado de arrastar e soltar (Drag & Drop)
         private Point? dragOriginSquare = null;
+        private Point? dragHoverSquare = null;
         private Point dragStartScreenPt;
         private Point dragCurrentScreenPt;
         private bool isDraggingPiece = false;
 
+        // Estado de animação de deslize do lance (~120 ms) e efeitos sonoros
+        private System.Windows.Forms.Timer animTimer = null!;
+        private readonly Stopwatch animStopwatch = new Stopwatch();
+        private Point? animFromSquare = null;
+        private Point? animToSquare = null;
+        private char animPieceChar = '.';
+        private const double MoveAnimationDurationMs = 125.0;
+        private bool soundEnabled = true;
+        private string botDelayMode = "Variável (0 a 1s)";
+        private ToolStripMenuItem soundMenuItem = null!;
+        private readonly List<ToolStripMenuItem> botDelayMenuItems = new List<ToolStripMenuItem>();
+        private ToolTip mainToolTip = null!;
+
+        // Estado do seletor de promoção estilo Lichess diretamente sobre a casa de destino
+        private Point? activePromotionTarget = null;
+        private bool activePromotionIsWhite = true;
+        private int promotionHoverIndex = -1;
+        private TaskCompletionSource<char?>? promotionTcs = null;
+        private static readonly (char code, string keyHint, string namePt)[] PromotionChoices =
+        {
+            ('Q', "Q", "Dama"),
+            ('R', "R", "Torre"),
+            ('B', "B", "Bispo"),
+            ('N', "N", "Cavalo")
+        };
+
         private string currentTheme = "Madeira";
 
         // Controles de Interface
+        private Button btnNewGame = null!;
+        private Button btnTakeback = null!;
+        private Button btnHint = null!;
+        private Button btnFlip = null!;
+        private Button btnDraw = null!;
+        private Button btnResign = null!;
+
         private DoubleBufferedPanel boardPanel = null!;
         private DoubleBufferedPanel evalBarPanel = null!;
         private DoubleBufferedPanel materialPanel = null!;
@@ -136,6 +170,8 @@ namespace XadrezApp
             userSettings = UserSettings.Load();
             playerIsWhite = userSettings.PlayAsWhite;
             isBoardFlipped = userSettings.BoardFlipped;
+            soundEnabled = userSettings.SoundEnabled;
+            botDelayMode = string.IsNullOrWhiteSpace(userSettings.BotDelayMode) ? "Variável (0 a 1s)" : userSettings.BotDelayMode;
             currentTheme = string.IsNullOrWhiteSpace(userSettings.Theme) ? "Madeira" : userSettings.Theme;
             timeControlMode = string.IsNullOrWhiteSpace(userSettings.ClockMode) ? "Fischer 5+3" : userSettings.ClockMode;
 
@@ -151,6 +187,7 @@ namespace XadrezApp
 
             InitResponsiveUI();
             InitDigitalClock();
+            InitMoveAnimationTimer();
             LoadPieceImages();
             ApplyLoadedSettingsToCombos();
             ResetBoard(confirmIfInProgress: false);
@@ -169,6 +206,12 @@ namespace XadrezApp
 
                 int themeIdx = themeCombo.Items.IndexOf(currentTheme);
                 themeCombo.SelectedIndex = themeIdx >= 0 ? themeIdx : 0;
+
+                if (soundMenuItem != null)
+                    soundMenuItem.Checked = soundEnabled;
+
+                foreach (var item in botDelayMenuItems)
+                    item.Checked = (item.Tag as string) == botDelayMode;
             }
             finally
             {
@@ -184,11 +227,41 @@ namespace XadrezApp
             userSettings.ClockMode = timeControlMode;
             userSettings.PlayAsWhite = playerIsWhite;
             userSettings.BoardFlipped = isBoardFlipped;
+            userSettings.SoundEnabled = soundEnabled;
+            userSettings.BotDelayMode = botDelayMode;
             userSettings.Save();
+        }
+
+        private int GetTargetBotMoveDelayMs() => botDelayMode switch
+        {
+            "Instantâneo (0 ms)" => 0,
+            "Rápido (250 ms)" => 250,
+            "Médio (500 ms)" => 500,
+            "1 Segundo (1000 ms)" => 1000,
+            _ => Random.Shared.Next(0, 1001) // Alterna naturalmente entre 0 ms e 1 segundo (1000 ms)
+        };
+
+        private void UpdateActionButtonsState()
+        {
+            if (btnTakeback == null) return;
+            bool promoActive = activePromotionTarget.HasValue || isPromotionDialogOpen;
+
+            btnTakeback.Enabled = !isBotThinking && !promoActive && history.Count > 0;
+            btnHint.Enabled = !gameOver && !isBotThinking && !isHintRunning && !promoActive;
+            btnDraw.Enabled = !gameOver && !isBotThinking && !promoActive && activePuzzle == null && rules.SanMoves.Count > 0;
+            btnResign.Enabled = !gameOver && !promoActive && activePuzzle == null && rules.SanMoves.Count > 0;
         }
 
         private void InitResponsiveUI()
         {
+            mainToolTip = new ToolTip
+            {
+                AutoPopDelay = 9000,
+                InitialDelay = 300,
+                ReshowDelay = 150,
+                ShowAlways = true
+            };
+
             var menuStrip = new MenuStrip
             {
                 BackColor = Color.FromArgb(236, 233, 216),
@@ -196,20 +269,40 @@ namespace XadrezApp
                 Dock = DockStyle.Top
             };
 
-            var fileMenu = new ToolStripMenuItem("Arquivo");
-            fileMenu.DropDownItems.Add("Novo Jogo Clássico (Ctrl+N)", null, (s, e) => ResetBoard(confirmIfInProgress: true));
-            fileMenu.DropDownItems.Add("Jogar de Brancas", null, (s, e) => SetPlayerColor(true));
-            fileMenu.DropDownItems.Add("Jogar de Pretas", null, (s, e) => SetPlayerColor(false));
-            fileMenu.DropDownItems.Add(new ToolStripSeparator());
-            fileMenu.DropDownItems.Add("Importar Partida PGN... (Ctrl+O)", null, (s, e) => PromptImportPgn());
-            fileMenu.DropDownItems.Add("Exportar / Salvar Partida PGN... (Ctrl+S)", null, (s, e) => ExportPgn());
-            fileMenu.DropDownItems.Add(new ToolStripSeparator());
-            fileMenu.DropDownItems.Add("Copiar FEN para Área de Transferência", null, (s, e) => CopyFen());
-            fileMenu.DropDownItems.Add("Carregar Posição FEN...", null, (s, e) => PromptLoadFen());
-            fileMenu.DropDownItems.Add(new ToolStripSeparator());
-            fileMenu.DropDownItems.Add("Sair", null, (s, e) => Close());
+            ToolStripMenuItem CreateMenuItem(string text, EventHandler onClick, Keys shortcutKeys = Keys.None)
+            {
+                var item = new ToolStripMenuItem(text, null, onClick);
+                if (shortcutKeys != Keys.None)
+                {
+                    item.ShortcutKeys = shortcutKeys;
+                    item.ShowShortcutKeys = true;
+                }
+                return item;
+            }
 
-            var puzzlesMenu = new ToolStripMenuItem("Puzzles Táticos (15 Desafios)");
+            var fileMenu = new ToolStripMenuItem("Arquivo");
+            fileMenu.DropDownItems.Add(CreateMenuItem("Novo Jogo Clássico", (s, e) => ResetBoard(confirmIfInProgress: true), Keys.Control | Keys.N));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Desfazer Lance (Voltar)", (s, e) => TakebackMove(), Keys.Control | Keys.Z));
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add(CreateMenuItem("Jogar de Brancas", (s, e) => SetPlayerColor(true)));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Jogar de Pretas", (s, e) => SetPlayerColor(false)));
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add(CreateMenuItem("Importar Partida PGN...", (s, e) => PromptImportPgn(), Keys.Control | Keys.O));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Exportar / Salvar Partida PGN...", (s, e) => ExportPgn(), Keys.Control | Keys.S));
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add(CreateMenuItem("Copiar FEN para Área de Transferência", (s, e) => CopyFen()));
+            fileMenu.DropDownItems.Add(CreateMenuItem("Carregar Posição FEN...", (s, e) => PromptLoadFen()));
+            fileMenu.DropDownItems.Add(new ToolStripSeparator());
+            fileMenu.DropDownItems.Add(CreateMenuItem("Sair", (s, e) => Close()));
+
+            var puzzlesMenu = new ToolStripMenuItem($"Puzzles Táticos ({StudyLibrary.Puzzles.Count} Desafios)");
+            puzzlesMenu.DropDownItems.Add("Próximo Desafio Tático", null, (s, e) =>
+            {
+                if (activePuzzle != null)
+                    currentPuzzleIndex = (currentPuzzleIndex + 1) % StudyLibrary.Puzzles.Count;
+                StartPuzzle(StudyLibrary.Puzzles[currentPuzzleIndex]);
+            });
+            puzzlesMenu.DropDownItems.Add(new ToolStripSeparator());
             for (int i = 0; i < StudyLibrary.Puzzles.Count; i++)
             {
                 var pz = StudyLibrary.Puzzles[i];
@@ -219,137 +312,119 @@ namespace XadrezApp
             puzzlesMenu.DropDownItems.Add("Sair do Modo Puzzle (Partida Normal)", null, (s, e) => ResetBoard(confirmIfInProgress: false));
 
             var studyMenu = new ToolStripMenuItem("Estudo e Análise");
-            studyMenu.DropDownItems.Add("Analisar Posição Atual (IA)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(false)));
-            studyMenu.DropDownItems.Add("Ajuda de Lance / Dica (F1)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
+            studyMenu.DropDownItems.Add(CreateMenuItem("Analisar Posição Atual (IA)", (s, e) => RunSafe(() => RunAnalysisAndHintAsync(false))));
+            studyMenu.DropDownItems.Add(CreateMenuItem("Ajuda de Lance / Dica", (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)), Keys.F1));
             studyMenu.DropDownItems.Add(new ToolStripSeparator());
-            studyMenu.DropDownItems.Add("Relatório de Precisão da Partida (IA)", null, (s, e) => ShowGameAnalysisReport());
+            studyMenu.DropDownItems.Add(CreateMenuItem("Relatório de Precisão da Partida (IA)", (s, e) => ShowGameAnalysisReport()));
 
             var viewMenu = new ToolStripMenuItem("Exibir");
-            viewMenu.DropDownItems.Add("Virar Tabuleiro (Ctrl+F)", null, (s, e) => FlipBoard());
+            viewMenu.DropDownItems.Add(CreateMenuItem("Virar Tabuleiro", (s, e) => FlipBoard(), Keys.Control | Keys.F));
+            soundMenuItem = new ToolStripMenuItem("Ativar Sons dos Lances")
+            {
+                Checked = soundEnabled,
+                CheckOnClick = true
+            };
+            soundMenuItem.CheckedChanged += (s, e) =>
+            {
+                if (suppressComboEvents) return;
+                soundEnabled = soundMenuItem.Checked;
+                SaveCurrentUserSettings();
+                SetStatusBanner(soundEnabled ? "Sons dos lances ativados." : "Sons dos lances desativados.", StatusBannerKind.Info);
+            };
+            viewMenu.DropDownItems.Add(soundMenuItem);
+
+            var delaySubMenu = new ToolStripMenuItem("Delay do Lance da IA (0 ms a 1 s)");
+            string[] delayOptions =
+            {
+                "Variável (0 a 1s)",
+                "Instantâneo (0 ms)",
+                "Rápido (250 ms)",
+                "Médio (500 ms)",
+                "1 Segundo (1000 ms)"
+            };
+            foreach (string opt in delayOptions)
+            {
+                var delayItem = new ToolStripMenuItem(opt)
+                {
+                    Tag = opt,
+                    Checked = (opt == botDelayMode)
+                };
+                delayItem.Click += (s, e) =>
+                {
+                    botDelayMode = opt;
+                    foreach (var it in botDelayMenuItems)
+                        it.Checked = (it.Tag as string) == botDelayMode;
+                    SaveCurrentUserSettings();
+                    SetStatusBanner($"Delay do lance da IA ajustado para: {botDelayMode}", StatusBannerKind.Info);
+                };
+                botDelayMenuItems.Add(delayItem);
+                delaySubMenu.DropDownItems.Add(delayItem);
+            }
+            viewMenu.DropDownItems.Add(delaySubMenu);
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             viewMenu.DropDownItems.Add("Tema: Madeira", null, (s, e) => SetTheme("Madeira"));
             viewMenu.DropDownItems.Add("Tema: Preto e Branco", null, (s, e) => SetTheme("Preto e Branco"));
             viewMenu.DropDownItems.Add("Tema: Branco e Verde", null, (s, e) => SetTheme("Branco e Verde"));
 
+            var helpMenu = new ToolStripMenuItem("Ajuda");
+            helpMenu.DropDownItems.Add(CreateMenuItem("Atalhos e Dicas de Uso...", (s, e) => ShowHelpAndShortcutsDialog()));
+
             menuStrip.Items.Add(fileMenu);
             menuStrip.Items.Add(puzzlesMenu);
             menuStrip.Items.Add(studyMenu);
             menuStrip.Items.Add(viewMenu);
+            menuStrip.Items.Add(helpMenu);
             MainMenuStrip = menuStrip;
 
-            // Barra de ferramentas superior
+            // Barra de ferramentas superior enxuta (apenas as 6 ações essenciais de partida, com AutoSize e WrapContents)
             var toolPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Top,
-                Height = 44,
-                Padding = new Padding(6, 5, 6, 4),
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                MinimumSize = new Size(0, 42),
+                Padding = new Padding(8, 5, 8, 5),
                 BackColor = Color.FromArgb(245, 244, 238),
                 BorderStyle = BorderStyle.FixedSingle,
-                WrapContents = false,
+                WrapContents = true,
                 AutoScroll = false
             };
 
-            void AddToolbarBtn(string text, int width, EventHandler onClick)
+            Button CreateToolbarBtn(string text, int width, string tooltipText, EventHandler onClick, Padding? customMargin = null)
             {
                 var btn = new Button
                 {
                     Text = text,
                     Size = new Size(width, 30),
-                    Margin = new Padding(2, 0, 2, 0),
+                    Margin = customMargin ?? new Padding(3, 0, 3, 0),
                     FlatStyle = FlatStyle.System,
                     Font = new Font("Segoe UI", 8.25f, FontStyle.Bold),
                     Cursor = Cursors.Hand
                 };
                 btn.Click += onClick;
+                mainToolTip.SetToolTip(btn, tooltipText);
                 toolPanel.Controls.Add(btn);
+                return btn;
             }
 
-            AddToolbarBtn("Novo Jogo", 76, (s, e) => ResetBoard(confirmIfInProgress: true));
-            AddToolbarBtn("Desistir", 66, (s, e) => ResignGame());
-            AddToolbarBtn("Empate", 64, (s, e) => OfferDraw());
-            AddToolbarBtn("Voltar", 62, (s, e) => TakebackMove());
-            AddToolbarBtn("Virar", 56, (s, e) => FlipBoard());
-            AddToolbarBtn("Dica (F1)", 72, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
-            AddToolbarBtn("Puzzles", 66, (s, e) =>
-            {
-                if (activePuzzle != null)
-                    currentPuzzleIndex = (currentPuzzleIndex + 1) % StudyLibrary.Puzzles.Count;
-                StartPuzzle(StudyLibrary.Puzzles[currentPuzzleIndex]);
-            });
-            AddToolbarBtn("Importar PGN", 92, (s, e) => PromptImportPgn());
-            AddToolbarBtn("Exportar PGN", 92, (s, e) => ExportPgn());
+            btnNewGame = CreateToolbarBtn("Novo Jogo", 86, "Iniciar uma nova partida (Ctrl+N)", (s, e) => ResetBoard(confirmIfInProgress: true));
+            btnTakeback = CreateToolbarBtn("Voltar (Ctrl+Z)", 102, "Desfazer o último par de lances (Ctrl+Z)", (s, e) => TakebackMove());
+            btnHint = CreateToolbarBtn("Dica (F1)", 82, "Pedir dica da IA com seta da melhor jogada (F1)", (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
+            btnFlip = CreateToolbarBtn("Virar (Ctrl+F)", 94, "Virar a orientação do tabuleiro (Ctrl+F)", (s, e) => FlipBoard());
 
-            Label CreateToolbarLabel(string text) => new Label
+            // Separador visual e afastamento antes de Empate e Desistir para evitar clique acidental
+            var sepPanel = new Panel
             {
-                Text = text,
-                AutoSize = true,
-                Margin = new Padding(6, 7, 2, 0),
-                Font = new Font("Segoe UI", 8.25f, FontStyle.Bold)
+                Size = new Size(2, 26),
+                Margin = new Padding(22, 2, 18, 2),
+                BackColor = Color.FromArgb(195, 190, 178)
             };
+            toolPanel.Controls.Add(sepPanel);
 
-            toolPanel.Controls.Add(CreateToolbarLabel("Cor:"));
-            colorCombo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 76,
-                Margin = new Padding(0, 3, 2, 0)
-            };
-            colorCombo.Items.AddRange(new object[] { "Brancas", "Pretas" });
-            colorCombo.SelectedIndex = 0;
-            colorCombo.SelectedIndexChanged += (s, e) =>
-            {
-                if (suppressComboEvents) return;
-                SetPlayerColor(colorCombo.SelectedIndex == 0);
-            };
-            toolPanel.Controls.Add(colorCombo);
+            btnDraw = CreateToolbarBtn("Empate", 76, "Propor empate por acordo à IA (pede confirmação)", (s, e) => OfferDraw());
+            btnResign = CreateToolbarBtn("Desistir", 80, "Desistir da partida atual (pede confirmação)", (s, e) => ResignGame(), new Padding(14, 0, 3, 0));
 
-            toolPanel.Controls.Add(CreateToolbarLabel("IA:"));
-            difficultyCombo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 108,
-                Margin = new Padding(0, 3, 2, 0)
-            };
-            difficultyCombo.Items.AddRange(new object[] { "Fácil (Iniciante)", "Médio (Clube)", "Difícil (Forte)", "Mestre (Máximo)" });
-            difficultyCombo.SelectedIndex = 0;
-            difficultyCombo.SelectedIndexChanged += (s, e) => SaveCurrentUserSettings();
-            toolPanel.Controls.Add(difficultyCombo);
-
-            toolPanel.Controls.Add(CreateToolbarLabel("Relógio:"));
-            clockCombo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 102,
-                Margin = new Padding(0, 3, 2, 0)
-            };
-            clockCombo.Items.AddRange(new object[] { "Fischer 5+3", "Fischer 3+2", "Fischer 10+0", "Bronstein 5+3", "Sem Relógio" });
-            clockCombo.SelectedIndex = 0;
-            clockCombo.SelectedIndexChanged += (s, e) =>
-            {
-                if (suppressComboEvents) return;
-                bool gameInProgress = rules.SanMoves.Count > 0 && !gameOver && activePuzzle == null;
-                ConfigureClockMode(clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3", resetRemainingTime: !gameInProgress);
-                SaveCurrentUserSettings();
-            };
-            toolPanel.Controls.Add(clockCombo);
-
-            toolPanel.Controls.Add(CreateToolbarLabel("Tema:"));
-            themeCombo = new ComboBox
-            {
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 96,
-                Margin = new Padding(0, 3, 2, 0)
-            };
-            themeCombo.Items.AddRange(new object[] { "Madeira", "Preto e Branco", "Branco e Verde" });
-            themeCombo.SelectedIndex = 0;
-            themeCombo.SelectedIndexChanged += (s, e) =>
-            {
-                if (suppressComboEvents) return;
-                SetTheme(themeCombo.SelectedItem?.ToString() ?? "Madeira");
-            };
-            toolPanel.Controls.Add(themeCombo);
-
-            // Layout principal responsivo em 2 colunas (Esquerda: Tabuleiro + Barra + Status/Log; Direita: Relógios + Material + Histórico + Gráfico)
+            // Layout principal responsivo em 2 colunas (Esquerda: Tabuleiro + Barra + Status/Log; Direita: Configurações + Relógios + Material + Histórico + Gráfico)
             var mainSplit = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -357,8 +432,8 @@ namespace XadrezApp
                 RowCount = 1,
                 Padding = new Padding(8, 6, 8, 8)
             };
-            mainSplit.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62f));
-            mainSplit.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38f));
+            mainSplit.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 61f));
+            mainSplit.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 39f));
             mainSplit.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
             // === COLUNA ESQUERDA ===
@@ -479,6 +554,7 @@ namespace XadrezApp
                 Cursor = Cursors.Hand
             };
             btnStartSearch.Click += (s, e) => RunSafe(() => RunAnalysisAndHintAsync(false));
+            mainToolTip.SetToolTip(btnStartSearch, "Analisar profundamente a posição atual com a IA");
 
             var btnAbortSearch = new Button
             {
@@ -489,6 +565,7 @@ namespace XadrezApp
                 Cursor = Cursors.Hand
             };
             btnAbortSearch.Click += (s, e) => AbortActiveSearches();
+            mainToolTip.SetToolTip(btnAbortSearch, "Interromper a busca da IA em andamento");
 
             var lblNodes = new Label
             {
@@ -571,17 +648,109 @@ namespace XadrezApp
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 6,
                 Margin = new Padding(0)
             };
             rightLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 64f)); // Painel de Configurações (Cor, IA, Relógio, Tema)
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32f)); // Relógios
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58f)); // Peças Capturadas e Saldo de Material
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100f)); // Lista de Lances (Histórico)
             rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34f)); // Barra de Navegação da Revisão (|< < > >|)
-            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 118f)); // Gráfico de Vantagem
+            rightLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 114f)); // Gráfico de Vantagem
 
-            // Linha 0 Direita: Relógios
+            // Linha 0 Direita: Painel de Configurações (Cor, IA, Relógio, Tema)
+            var settingsPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 4,
+                RowCount = 2,
+                BackColor = Color.FromArgb(245, 244, 238),
+                BorderStyle = BorderStyle.FixedSingle,
+                Padding = new Padding(6, 4, 6, 4),
+                Margin = new Padding(0, 0, 0, 4)
+            };
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42f));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 46f));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62f));
+            settingsPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54f));
+            settingsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+            settingsPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
+
+            Label CreateSettingLabel(string text) => new Label
+            {
+                Text = text,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleRight,
+                Font = new Font("Segoe UI", 8f, FontStyle.Bold),
+                Margin = new Padding(0, 0, 4, 0)
+            };
+
+            colorCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 1, 6, 1)
+            };
+            colorCombo.Items.AddRange(new object[] { "Brancas", "Pretas" });
+            colorCombo.SelectedIndex = 0;
+            colorCombo.SelectedIndexChanged += (s, e) =>
+            {
+                if (suppressComboEvents) return;
+                SetPlayerColor(colorCombo.SelectedIndex == 0);
+            };
+
+            themeCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 1, 0, 1)
+            };
+            themeCombo.Items.AddRange(new object[] { "Madeira", "Preto e Branco", "Branco e Verde" });
+            themeCombo.SelectedIndex = 0;
+            themeCombo.SelectedIndexChanged += (s, e) =>
+            {
+                if (suppressComboEvents) return;
+                SetTheme(themeCombo.SelectedItem?.ToString() ?? "Madeira");
+            };
+
+            difficultyCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 1, 6, 1)
+            };
+            difficultyCombo.Items.AddRange(new object[] { "Fácil (Iniciante)", "Médio (Clube)", "Difícil (Forte)", "Mestre (Máximo)" });
+            difficultyCombo.SelectedIndex = 0;
+            difficultyCombo.SelectedIndexChanged += (s, e) => SaveCurrentUserSettings();
+
+            clockCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 1, 0, 1)
+            };
+            clockCombo.Items.AddRange(new object[] { "Fischer 5+3", "Fischer 3+2", "Fischer 10+0", "Bronstein 5+3", "Sem Relógio" });
+            clockCombo.SelectedIndex = 0;
+            clockCombo.SelectedIndexChanged += (s, e) =>
+            {
+                if (suppressComboEvents) return;
+                bool gameInProgress = rules.SanMoves.Count > 0 && !gameOver && activePuzzle == null;
+                ConfigureClockMode(clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3", resetRemainingTime: !gameInProgress);
+                SaveCurrentUserSettings();
+            };
+
+            settingsPanel.Controls.Add(CreateSettingLabel("Cor:"), 0, 0);
+            settingsPanel.Controls.Add(colorCombo, 1, 0);
+            settingsPanel.Controls.Add(CreateSettingLabel("Tema:"), 2, 0);
+            settingsPanel.Controls.Add(themeCombo, 3, 0);
+            settingsPanel.Controls.Add(CreateSettingLabel("IA:"), 0, 1);
+            settingsPanel.Controls.Add(difficultyCombo, 1, 1);
+            settingsPanel.Controls.Add(CreateSettingLabel("Relógio:"), 2, 1);
+            settingsPanel.Controls.Add(clockCombo, 3, 1);
+            rightLayout.Controls.Add(settingsPanel, 0, 0);
+
+            // Linha 1 Direita: Relógios
             var clocksLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -594,31 +763,34 @@ namespace XadrezApp
 
             whiteClockLabel = new Label
             {
-                Text = "Brancas: 05:00",
+                Text = "▶ Brancas: 05:00",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.White,
                 ForeColor = Color.Black,
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 10.5f, FontStyle.Bold),
+                Font = new Font("Consolas", 10f, FontStyle.Bold),
                 Margin = new Padding(0, 0, 3, 0)
             };
+            whiteClockLabel.Paint += (s, e) => DrawClockTurnIndicator(e.Graphics, whiteClockLabel, isWhiteClock: true);
+
             blackClockLabel = new Label
             {
-                Text = "Pretas: 05:00",
+                Text = "  Pretas: 05:00",
                 Dock = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.FromArgb(35, 35, 35),
                 ForeColor = Color.White,
                 BorderStyle = BorderStyle.FixedSingle,
-                Font = new Font("Consolas", 10.5f, FontStyle.Bold),
+                Font = new Font("Consolas", 10f, FontStyle.Bold),
                 Margin = new Padding(3, 0, 0, 0)
             };
+            blackClockLabel.Paint += (s, e) => DrawClockTurnIndicator(e.Graphics, blackClockLabel, isWhiteClock: false);
             clocksLayout.Controls.Add(whiteClockLabel, 0, 0);
             clocksLayout.Controls.Add(blackClockLabel, 1, 0);
-            rightLayout.Controls.Add(clocksLayout, 0, 0);
+            rightLayout.Controls.Add(clocksLayout, 0, 1);
 
-            // Linha 1 Direita: Painel de Peças Capturadas e Saldo de Material (substitui a lista de desenvolvedor Lance/UCI)
+            // Linha 2 Direita: Painel de Peças Capturadas e Saldo de Material
             materialPanel = new DoubleBufferedPanel
             {
                 Dock = DockStyle.Fill,
@@ -627,9 +799,9 @@ namespace XadrezApp
                 Margin = new Padding(0, 0, 0, 4)
             };
             materialPanel.Paint += MaterialPanel_Paint;
-            rightLayout.Controls.Add(materialPanel, 0, 1);
+            rightLayout.Controls.Add(materialPanel, 0, 2);
 
-            // Linha 2 Direita: Lista de Histórico de Lances Interativa
+            // Linha 3 Direita: Lista de Histórico de Lances Interativa
             moveHistoryList = new ListView
             {
                 Dock = DockStyle.Fill,
@@ -648,9 +820,9 @@ namespace XadrezApp
             moveHistoryList.Columns.Add("Análise", 130);
             moveHistoryList.Resize += (s, e) => AdjustMoveHistoryColumns();
             moveHistoryList.MouseUp += MoveHistoryList_MouseUp;
-            rightLayout.Controls.Add(moveHistoryList, 0, 2);
+            rightLayout.Controls.Add(moveHistoryList, 0, 3);
 
-            // Linha 3 Direita: Navegação de Revisão (|<  <  >  >|)
+            // Linha 4 Direita: Navegação de Revisão (|<  <  >  >|)
             var reviewNavLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -664,7 +836,7 @@ namespace XadrezApp
             reviewNavLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42f));
             reviewNavLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
 
-            Button CreateNavBtn(string label, Action onClick)
+            Button CreateNavBtn(string label, string tooltipText, Action onClick)
             {
                 var b = new Button
                 {
@@ -676,13 +848,14 @@ namespace XadrezApp
                     Cursor = Cursors.Hand
                 };
                 b.Click += (s, e) => onClick();
+                mainToolTip.SetToolTip(b, tooltipText);
                 return b;
             }
 
-            reviewNavLayout.Controls.Add(CreateNavBtn("|<", () => JumpToPly(0)), 0, 0);
-            reviewNavLayout.Controls.Add(CreateNavBtn("<", () => StepReviewPly(-1)), 1, 0);
-            reviewNavLayout.Controls.Add(CreateNavBtn(">", () => StepReviewPly(1)), 2, 0);
-            reviewNavLayout.Controls.Add(CreateNavBtn(">|", () => JumpToLivePosition()), 3, 0);
+            reviewNavLayout.Controls.Add(CreateNavBtn("|<", "Ir para a posição inicial (Home)", () => JumpToPly(0)), 0, 0);
+            reviewNavLayout.Controls.Add(CreateNavBtn("<", "Voltar um meio-lance na revisão (Seta ←)", () => StepReviewPly(-1)), 1, 0);
+            reviewNavLayout.Controls.Add(CreateNavBtn(">", "Avançar um meio-lance na revisão (Seta →)", () => StepReviewPly(1)), 2, 0);
+            reviewNavLayout.Controls.Add(CreateNavBtn(">|", "Voltar para a posição ao vivo (End)", () => JumpToLivePosition()), 3, 0);
 
             reviewStatusLabel = new Label
             {
@@ -695,9 +868,9 @@ namespace XadrezApp
                 Padding = new Padding(4, 0, 0, 0)
             };
             reviewNavLayout.Controls.Add(reviewStatusLabel, 4, 0);
-            rightLayout.Controls.Add(reviewNavLayout, 0, 3);
+            rightLayout.Controls.Add(reviewNavLayout, 0, 4);
 
-            // Linha 4 Direita: Gráfico de Vantagem Interativo
+            // Linha 5 Direita: Gráfico de Vantagem Interativo
             advantageGraphPanel = new DoubleBufferedPanel
             {
                 Dock = DockStyle.Fill,
@@ -709,7 +882,7 @@ namespace XadrezApp
             advantageGraphPanel.Paint += AdvantageGraphPanel_Paint;
             advantageGraphPanel.MouseDown += AdvantageGraphPanel_MouseDownOrMove;
             advantageGraphPanel.MouseMove += AdvantageGraphPanel_MouseDownOrMove;
-            rightLayout.Controls.Add(advantageGraphPanel, 0, 4);
+            rightLayout.Controls.Add(advantageGraphPanel, 0, 5);
 
             mainSplit.Controls.Add(leftLayout, 0, 0);
             mainSplit.Controls.Add(rightLayout, 1, 0);
@@ -720,6 +893,7 @@ namespace XadrezApp
 
             RecalculateBoardGeometry();
             AdjustMoveHistoryColumns();
+            UpdateActionButtonsState();
         }
 
         private void AdjustMoveHistoryColumns()
@@ -828,10 +1002,97 @@ namespace XadrezApp
             }
         }
 
+        // === SELETOR DE PROMOÇÃO ESTILO LICHESS SOBRE A CASA DE DESTINO ===
+        private static Point GetPromotionOptionBoardSquare(Point targetSquare, int optionIndex)
+        {
+            int dir = targetSquare.Y == 0 ? 1 : -1;
+            return new Point(targetSquare.X, targetSquare.Y + dir * optionIndex);
+        }
+
+        private int HitTestPromotionOptionIndex(Point boardSquare)
+        {
+            if (!activePromotionTarget.HasValue) return -1;
+            var target = activePromotionTarget.Value;
+            for (int i = 0; i < PromotionChoices.Length; i++)
+            {
+                if (GetPromotionOptionBoardSquare(target, i) == boardSquare)
+                    return i;
+            }
+            return -1;
+        }
+
+        private void CompletePromotionSelection(char? chosenPieceCode)
+        {
+            var tcs = promotionTcs;
+            activePromotionTarget = null;
+            promotionHoverIndex = -1;
+            promotionTcs = null;
+            UpdateActionButtonsState();
+            boardPanel.Invalidate();
+
+            if (tcs != null)
+            {
+                char? finalChar = chosenPieceCode.HasValue
+                    ? (activePromotionIsWhite ? char.ToUpper(chosenPieceCode.Value) : char.ToLower(chosenPieceCode.Value))
+                    : null;
+                tcs.TrySetResult(finalChar);
+            }
+        }
+
+        private Task<char?> AskPromotionOnBoardAsync(Point toSquare, bool isWhite)
+        {
+            promotionTcs?.TrySetResult(null);
+            activePromotionTarget = toSquare;
+            activePromotionIsWhite = isWhite;
+            promotionHoverIndex = 0;
+            promotionTcs = new TaskCompletionSource<char?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            SetStatusBanner(
+                "Promoção de peão: clique na peça desejada sobre o tabuleiro (ou pressione Q, R, B, N | Esc cancela).",
+                StatusBannerKind.Info);
+            UpdateActionButtonsState();
+            boardPanel.Invalidate();
+            return promotionTcs.Task;
+        }
+
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            // Evita interceptar setas quando um TextBox tem foco
-            bool textBoxFocused = ActiveControl is TextBox;
+            // Se o seletor de promoção no tabuleiro estiver aberto, trata Q/R/B/N e Esc imediatamente
+            if (activePromotionTarget.HasValue)
+            {
+                switch (keyData)
+                {
+                    case Keys.Escape:
+                        CompletePromotionSelection(null);
+                        return true;
+                    case Keys.Q:
+                    case Keys.D:
+                    case Keys.D1:
+                    case Keys.NumPad1:
+                        CompletePromotionSelection('Q');
+                        return true;
+                    case Keys.R:
+                    case Keys.T:
+                    case Keys.D2:
+                    case Keys.NumPad2:
+                        CompletePromotionSelection('R');
+                        return true;
+                    case Keys.B:
+                    case Keys.D3:
+                    case Keys.NumPad3:
+                        CompletePromotionSelection('B');
+                        return true;
+                    case Keys.N:
+                    case Keys.C:
+                    case Keys.D4:
+                    case Keys.NumPad4:
+                        CompletePromotionSelection('N');
+                        return true;
+                }
+            }
+
+            // Evita interceptar setas quando um TextBox ou ComboBox tem foco!
+            bool inputControlFocused = ActiveControl is TextBox or ComboBox;
 
             if (keyData == (Keys.Control | Keys.N))
             {
@@ -864,7 +1125,7 @@ namespace XadrezApp
                 return true;
             }
 
-            if (!textBoxFocused)
+            if (!inputControlFocused)
             {
                 if (keyData == Keys.Left)
                 {
@@ -936,7 +1197,7 @@ namespace XadrezApp
             clockTimer = new System.Windows.Forms.Timer { Interval = 100 };
             clockTimer.Tick += (s, e) =>
             {
-                if (gameOver || !clockRunning || isPromotionDialogOpen || timeControlMode == "Sem Relógio" || activePuzzle != null)
+                if (gameOver || !clockRunning || isPromotionDialogOpen || activePromotionTarget.HasValue || timeControlMode == "Sem Relógio" || activePuzzle != null)
                 {
                     clockStopwatch.Reset();
                     return;
@@ -1058,25 +1319,119 @@ namespace XadrezApp
             UpdateClockLabels();
         }
 
+        private void InitMoveAnimationTimer()
+        {
+            animTimer = new System.Windows.Forms.Timer { Interval = 15 };
+            animTimer.Tick += (s, e) =>
+            {
+                if (!animFromSquare.HasValue || !animToSquare.HasValue || animStopwatch.Elapsed.TotalMilliseconds >= MoveAnimationDurationMs)
+                {
+                    StopMoveSlideAnimation();
+                    return;
+                }
+                boardPanel.Invalidate();
+            };
+        }
+
+        private void StartMoveSlideAnimation(Point from, Point to, char pieceChar)
+        {
+            if (from == to || pieceChar == '.')
+            {
+                StopMoveSlideAnimation();
+                return;
+            }
+            animFromSquare = from;
+            animToSquare = to;
+            animPieceChar = pieceChar;
+            animStopwatch.Restart();
+            animTimer.Start();
+            boardPanel.Invalidate();
+        }
+
+        private void StopMoveSlideAnimation()
+        {
+            bool hadAnim = animFromSquare.HasValue;
+            animFromSquare = null;
+            animToSquare = null;
+            animPieceChar = '.';
+            animStopwatch.Reset();
+            animTimer?.Stop();
+            if (hadAnim && boardPanel != null)
+                boardPanel.Invalidate();
+        }
+
+        private void PlayMoveSoundForSan(string san)
+        {
+            if (!soundEnabled || string.IsNullOrEmpty(san)) return;
+            if (san.EndsWith('#'))
+                ChessSoundEffects.PlayGameEnd();
+            else if (san.Contains('+'))
+                ChessSoundEffects.PlayCheck();
+            else if (san.Contains('x'))
+                ChessSoundEffects.PlayCapture();
+            else
+                ChessSoundEffects.PlayMove();
+        }
+
+        private void DrawClockTurnIndicator(Graphics g, Label clockLbl, bool isWhiteClock)
+        {
+            bool isActiveTurn = !gameOver && activePuzzle == null && (rules.WhiteTurn == isWhiteClock);
+            bool isLowTime = timeControlMode != "Sem Relógio" && activePuzzle == null &&
+                             (isWhiteClock ? whiteSecondsLeft < 10.0 : blackSecondsLeft < 10.0);
+
+            int w = clockLbl.ClientSize.Width;
+            int h = clockLbl.ClientSize.Height;
+            if (w <= 4 || h <= 4) return;
+
+            if (isActiveTurn)
+            {
+                Color barColor = isLowTime
+                    ? Color.FromArgb(255, 235, 60)
+                    : Color.FromArgb(30, 175, 75);
+                using var barBrush = new SolidBrush(barColor);
+                g.FillRectangle(barBrush, 0, h - 4, w, 4);
+
+                using var borderPen = new Pen(barColor, 2f);
+                g.DrawRectangle(borderPen, 1, 1, w - 2, h - 2);
+            }
+            else if (isLowTime)
+            {
+                using var warnPen = new Pen(Color.FromArgb(255, 220, 50), 2f) { DashStyle = DashStyle.Dash };
+                g.DrawRectangle(warnPen, 1, 1, w - 2, h - 2);
+            }
+        }
+
         private void UpdateClockLabels()
         {
+            bool whiteTurnActive = !gameOver && (rules.WhiteTurn);
+            bool blackTurnActive = !gameOver && (!rules.WhiteTurn);
+            string wTurnPrefix = whiteTurnActive ? "▶ " : "  ";
+            string bTurnPrefix = blackTurnActive ? "▶ " : "  ";
+
             if (timeControlMode == "Sem Relógio" || activePuzzle != null)
             {
-                whiteClockLabel.Text = "Brancas: --:--";
+                whiteClockLabel.Text = $"{wTurnPrefix}Brancas: --:--";
                 whiteClockLabel.BackColor = Color.White;
                 whiteClockLabel.ForeColor = Color.Black;
 
-                blackClockLabel.Text = "Pretas: --:--";
+                blackClockLabel.Text = $"{bTurnPrefix}Pretas: --:--";
                 blackClockLabel.BackColor = Color.FromArgb(35, 35, 35);
                 blackClockLabel.ForeColor = Color.White;
+
+                whiteClockLabel.Invalidate();
+                blackClockLabel.Invalidate();
                 return;
             }
 
-            whiteClockLabel.Text = $"Brancas: {FormatClockTime(whiteSecondsLeft)}";
-            blackClockLabel.Text = $"Pretas: {FormatClockTime(blackSecondsLeft)}";
+            bool wLow = whiteSecondsLeft < 10.0;
+            bool bLow = blackSecondsLeft < 10.0;
+            string wWarn = wLow ? "⚠ " : "";
+            string bWarn = bLow ? "⚠ " : "";
 
-            // Abaixo de 10 segundos o relógio fica vermelho para alerta imediato
-            if (whiteSecondsLeft < 10.0)
+            whiteClockLabel.Text = $"{wWarn}{wTurnPrefix}Brancas: {FormatClockTime(whiteSecondsLeft)}";
+            blackClockLabel.Text = $"{bWarn}{bTurnPrefix}Pretas: {FormatClockTime(blackSecondsLeft)}";
+
+            if (wLow)
             {
                 whiteClockLabel.BackColor = Color.FromArgb(205, 30, 30);
                 whiteClockLabel.ForeColor = Color.White;
@@ -1087,7 +1442,7 @@ namespace XadrezApp
                 whiteClockLabel.ForeColor = Color.Black;
             }
 
-            if (blackSecondsLeft < 10.0)
+            if (bLow)
             {
                 blackClockLabel.BackColor = Color.FromArgb(205, 30, 30);
                 blackClockLabel.ForeColor = Color.White;
@@ -1097,6 +1452,9 @@ namespace XadrezApp
                 blackClockLabel.BackColor = Color.FromArgb(35, 35, 35);
                 blackClockLabel.ForeColor = Color.White;
             }
+
+            whiteClockLabel.Invalidate();
+            blackClockLabel.Invalidate();
         }
 
         private static string FormatClockTime(double secondsLeft)
@@ -1172,11 +1530,14 @@ namespace XadrezApp
             engine.StopSearch();
             isHintRunning = false;
             UpdateThinkingIndicator("✔ Busca interrompida", false);
+            UpdateActionButtonsState();
             SetStatusBanner("Busca da IA interrompida pelo usuário.", StatusBannerKind.Info);
         }
 
         private void ResetGameState()
         {
+            CompletePromotionSelection(null);
+            StopMoveSlideAnimation();
             gameGeneration++;
             hintGeneration++;
             try { gameSessionCts?.Cancel(); } catch { }
@@ -1206,6 +1567,7 @@ namespace XadrezApp
             premoveSelection = null;
             queuedPremove = null;
             dragOriginSquare = null;
+            dragHoverSquare = null;
             isDraggingPiece = false;
             markedSquares.Clear();
             drawnArrows.Clear();
@@ -1215,10 +1577,12 @@ namespace XadrezApp
             moveHistoryList.Items.Clear();
             UpdateThinkingIndicator("✔ Pronto", false);
             UpdateReviewStatusLabel();
+            UpdateActionButtonsState();
         }
 
         private void EndCurrentGame(string statusText, StatusBannerKind bannerKind = StatusBannerKind.Info)
         {
+            CompletePromotionSelection(null);
             gameOver = true;
             clockRunning = false;
             clockStopwatch.Reset();
@@ -1237,9 +1601,14 @@ namespace XadrezApp
             premoveSelection = null;
             queuedPremove = null;
             dragOriginSquare = null;
+            dragHoverSquare = null;
             isDraggingPiece = false;
             hintArrow = null;
+            if (soundEnabled)
+                ChessSoundEffects.PlayGameEnd();
             UpdateThinkingIndicator("🏁 Fim de Partida", false);
+            UpdateClockLabels();
+            UpdateActionButtonsState();
             SetStatusBanner(statusText, bannerKind);
             RefreshAllVisualPanels();
         }
@@ -1263,8 +1632,10 @@ namespace XadrezApp
 
             openingBookLabel.Text = "Abertura: Posição Inicial (Aguardando 1º lance)";
             string sfStatus = engine.IsUsingStockfish ? "Stockfish Oficial Conectado" : "Engine Tática Posicional Interna Ativa";
-            engineLogBox.Text = $"[{sfStatus}] 15 Puzzles, Revisão Interativa e Análise Pós-Lance prontos." + Environment.NewLine;
+            engineLogBox.Text = $"[{sfStatus}] {StudyLibrary.Puzzles.Count} Puzzles, Livro de Aberturas Expandido, Revisão Interativa e Análise Pós-Lance prontos." + Environment.NewLine;
 
+            UpdateClockLabels();
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
 
             if (playerIsWhite)
@@ -1307,7 +1678,11 @@ namespace XadrezApp
         // === REVISÃO INTERATIVA DE LANCES (CLIQUE NA LISTA, SETAS <- / -> E GRÁFICO) ===
         private void StepReviewPly(int delta)
         {
-            if (plySnapshots.Count <= 1) return;
+            if (plySnapshots.Count <= 1)
+            {
+                SetStatusBanner("Ainda não há lances realizados para revisar no histórico.", StatusBannerKind.Info);
+                return;
+            }
             int current = reviewPlyIndex ?? (plySnapshots.Count - 1);
             int target = Math.Clamp(current + delta, 0, plySnapshots.Count - 1);
             JumpToPly(target);
@@ -1324,9 +1699,11 @@ namespace XadrezApp
             if (plySnapshots.Count == 0) return;
             plyIdx = Math.Clamp(plyIdx, 0, plySnapshots.Count - 1);
 
+            StopMoveSlideAnimation();
             selectedSquare = null;
             legalMoves.Clear();
             dragOriginSquare = null;
+            dragHoverSquare = null;
             isDraggingPiece = false;
             hintArrow = null;
 
@@ -1346,7 +1723,6 @@ namespace XadrezApp
                 currentDisplayedEvalText = FormatEvalPawnsText(currentDisplayedEvalWhite);
             }
 
-            // Sincroniza seleção na lista de lances
             if (plyIdx > 0)
             {
                 int rowIdx = (plyIdx - 1) / 2;
@@ -1407,7 +1783,6 @@ namespace XadrezApp
             int rowIdx = hit.Item.Index;
             int subIdx = hit.SubItem != null ? hit.Item.SubItems.IndexOf(hit.SubItem) : 1;
 
-            // Coluna 2 = Pretas (2º ply da linha), demais colunas = Brancas (1º ply da linha)
             int plyOffset = (subIdx == 2) ? 2 : 1;
             int targetPly = rowIdx * 2 + plyOffset;
             if (targetPly >= plySnapshots.Count)
@@ -1441,6 +1816,7 @@ namespace XadrezApp
             openingBookLabel.Text = $"MODO PUZZLE: {puzzle.Title} [{puzzle.Theme}]";
             SetStatusBanner($"Desafio: {puzzle.Title} | Dica: {puzzle.Hint}", StatusBannerKind.Info);
             UpdateClockLabels();
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
             StartBackgroundTurnAnalysis();
         }
@@ -1480,6 +1856,7 @@ namespace XadrezApp
             using var form = new Form
             {
                 Text = "Carregar Posição FEN",
+                AutoScaleMode = AutoScaleMode.Dpi,
                 ClientSize = new Size(540, 120),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
@@ -1489,6 +1866,7 @@ namespace XadrezApp
             var lbl = new Label { Text = "Cole a string FEN completa abaixo:", Location = new Point(12, 10), AutoSize = true };
             var txt = new TextBox { Text = DisplayedRules.ToFen(), Location = new Point(12, 32), Width = 515 };
             var btn = new Button { Text = "Carregar FEN", Location = new Point(412, 68), Size = new Size(115, 34), Cursor = Cursors.Hand };
+            var btnCancel = new Button { Text = "Cancelar", Location = new Point(290, 68), Size = new Size(115, 34), Cursor = Cursors.Hand, DialogResult = DialogResult.Cancel };
             string? validatedFen = null;
             btn.Click += (s, e) =>
             {
@@ -1506,8 +1884,10 @@ namespace XadrezApp
             };
             form.Controls.Add(lbl);
             form.Controls.Add(txt);
+            form.Controls.Add(btnCancel);
             form.Controls.Add(btn);
             form.AcceptButton = btn;
+            form.CancelButton = btnCancel;
 
             if (form.ShowDialog(this) == DialogResult.OK && validatedFen != null)
                 StartGameFromFen(validatedFen);
@@ -1523,6 +1903,7 @@ namespace XadrezApp
             openingBookLabel.Text = "Abertura: Posição carregada via FEN";
             engineLogBox.AppendText($"[FEN] Posição carregada: {rules.ToFen()}" + Environment.NewLine);
             UpdateClockLabels();
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
 
             if (CheckAndAnnounceEndGame()) return;
@@ -1544,6 +1925,7 @@ namespace XadrezApp
             using var form = new Form
             {
                 Text = "Importar Partida PGN",
+                AutoScaleMode = AutoScaleMode.Dpi,
                 ClientSize = new Size(620, 420),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
@@ -1679,6 +2061,7 @@ namespace XadrezApp
                     StartBackgroundTurnAnalysis();
             }
 
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
         }
 
@@ -1801,7 +2184,23 @@ namespace XadrezApp
 
         private void TakebackMove()
         {
-            if (isBotThinking || history.Count == 0) return;
+            if (activePromotionTarget.HasValue)
+            {
+                CompletePromotionSelection(null);
+                return;
+            }
+
+            if (isBotThinking)
+            {
+                SetStatusBanner("Aguarde a IA terminar o lance atual (ou clique em 'Parar') antes de desfazer.", StatusBannerKind.Warning);
+                return;
+            }
+
+            if (history.Count == 0)
+            {
+                SetStatusBanner("Ainda não há lances para desfazer nesta partida.", StatusBannerKind.Info);
+                return;
+            }
 
             JumpToLivePosition();
             hintGeneration++;
@@ -1819,7 +2218,6 @@ namespace XadrezApp
             legalMoves.Clear();
             hintArrow = null;
 
-            // Sincroniza snapshots lineares com a posição após desfazer o par de meio-lances
             int targetSnapCount = rules.SanMoves.Count + 1;
             while (plySnapshots.Count > targetSnapCount && plySnapshots.Count > 1)
                 plySnapshots.RemoveAt(plySnapshots.Count - 1);
@@ -1842,14 +2240,20 @@ namespace XadrezApp
 
             openingBookLabel.Text = $"Abertura: {StudyLibrary.DetectOpening(rules.SanMoves)}";
             SetStatusBanner("Lance desfeito (Voltar). Sua vez!", StatusBannerKind.Info);
+            UpdateClockLabels();
             UpdateReviewStatusLabel();
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
             StartBackgroundTurnAnalysis();
         }
 
         private void ResignGame()
         {
-            if (gameOver) return;
+            if (gameOver)
+            {
+                SetStatusBanner("A partida já foi encerrada.", StatusBannerKind.Info);
+                return;
+            }
 
             if (rules.SanMoves.Count > 0)
             {
@@ -1871,7 +2275,25 @@ namespace XadrezApp
 
         private void OfferDraw()
         {
-            if (gameOver) return;
+            if (gameOver)
+            {
+                SetStatusBanner("A partida já foi encerrada.", StatusBannerKind.Info);
+                return;
+            }
+            if (isBotThinking)
+            {
+                SetStatusBanner("Aguarde a IA terminar o lance atual antes de propor empate.", StatusBannerKind.Warning);
+                return;
+            }
+
+            var confirm = MessageBox.Show(
+                "Deseja propor empate por acordo à IA nesta posição?",
+                "Confirmar Pedido de Empate",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            if (confirm != DialogResult.Yes)
+                return;
+
             int evalWhite = EngineService.EvaluateBoardWhiteRelative(rules.Board);
             int botAdvantageCp = playerIsWhite ? -evalWhite : evalWhite;
 
@@ -1884,7 +2306,6 @@ namespace XadrezApp
             }
             else
             {
-                // Sem MessageBox intrusivo quando o bot recusa o empate!
                 SetStatusBanner("O bot recusou o empate porque avalia que está em vantagem na posição.", StatusBannerKind.Warning);
             }
         }
@@ -1900,7 +2321,6 @@ namespace XadrezApp
             if (w <= 0 || h <= 0) return;
 
             double whiteWinProb = EngineService.EvalToWinProbability(currentDisplayedEvalWhite);
-            // Se o tabuleiro não estiver invertido, Brancas ficam na parte inferior da barra e Pretas no topo
             double topRatio = isBoardFlipped ? whiteWinProb : (1.0 - whiteWinProb);
             int topPixels = (int)Math.Round(h * Math.Clamp(topRatio, 0.04, 0.96));
 
@@ -1912,7 +2332,6 @@ namespace XadrezApp
             using (var bottomBrush = new SolidBrush(bottomColor))
                 g.FillRectangle(bottomBrush, 0, topPixels, w, h - topPixels);
 
-            // Linha central de igualdade (0.00)
             using (var midPen = new Pen(Color.FromArgb(140, 125, 125, 125), 1f))
                 g.DrawLine(midPen, 0, h / 2, w, h / 2);
 
@@ -1966,7 +2385,6 @@ namespace XadrezApp
             string whiteAdv = matDiffWhite > 0 ? $"+{matDiffWhite}" : "";
             string blackAdv = matDiffWhite < 0 ? $"+{Math.Abs(matDiffWhite)}" : "";
 
-            // Linha superior: Brancas
             g.DrawString("Brancas:", titleFont, darkBrush, 8, 6);
             string wSyms = SymbolsForCaptured(capturedByWhite);
             if (capturedByWhite.Count == 0)
@@ -1977,11 +2395,9 @@ namespace XadrezApp
             if (!string.IsNullOrEmpty(whiteAdv))
                 g.DrawString(whiteAdv, badgeFont, advBrush, materialPanel.ClientSize.Width - 38, 6);
 
-            // Linha divisória
             using (var sepPen = new Pen(Color.FromArgb(220, 215, 205), 1))
                 g.DrawLine(sepPen, 6, 28, materialPanel.ClientSize.Width - 6, 28);
 
-            // Linha inferior: Pretas
             g.DrawString("Pretas:", titleFont, darkBrush, 8, 33);
             string bSyms = SymbolsForCaptured(capturedByBlack);
             if (capturedByBlack.Count == 0)
@@ -2007,7 +2423,6 @@ namespace XadrezApp
             int plotH = Math.Max(10, h - padTop - padBottom);
             float midY = padTop + plotH / 2f;
 
-            // Fundo da área do gráfico
             using (var bgBrush = new SolidBrush(Color.FromArgb(46, 46, 48)))
                 g.FillRectangle(bgBrush, padLeft, padTop, plotW, plotH);
 
@@ -2029,7 +2444,6 @@ namespace XadrezApp
                 return (float)(midY - (clamped / 8.0) * (plotH / 2.0 - 3));
             }
 
-            // Polígono preenchido da curva de avaliação
             var polyPts = new List<PointF> { new PointF(PointX(0), midY) };
             for (int i = 0; i < plyEvaluations.Count; i++)
                 polyPts.Add(new PointF(PointX(i), PointY(plyEvaluations[i])));
@@ -2038,11 +2452,9 @@ namespace XadrezApp
             using (var areaBrush = new SolidBrush(Color.FromArgb(165, 238, 238, 232)))
                 g.FillPolygon(areaBrush, polyPts.ToArray());
 
-            // Linha zero
             using (var zeroPen = new Pen(Color.FromArgb(150, 140, 140, 140), 1f) { DashStyle = DashStyle.Dash })
                 g.DrawLine(zeroPen, padLeft, midY, padLeft + plotW, midY);
 
-            // Linha da avaliação
             var curvePts = new PointF[plyEvaluations.Count];
             for (int i = 0; i < plyEvaluations.Count; i++)
                 curvePts[i] = new PointF(PointX(i), PointY(plyEvaluations[i]));
@@ -2050,7 +2462,6 @@ namespace XadrezApp
             using (var linePen = new Pen(Color.FromArgb(65, 175, 240), 2f))
                 g.DrawLines(linePen, curvePts);
 
-            // Marcador vertical do lance selecionado na revisão
             int activePly = reviewPlyIndex ?? (plyEvaluations.Count - 1);
             activePly = Math.Clamp(activePly, 0, plyEvaluations.Count - 1);
             float cursorX = PointX(activePly);
@@ -2073,7 +2484,7 @@ namespace XadrezApp
             JumpToPly(targetPly);
         }
 
-        // === DESENHO DO TABULEIRO (DESTAQUES, BOLINHAS/ANÉIS, DRAG & DROP, ORIENTAÇÃO) ===
+        // === DESENHO DO TABULEIRO (DESTAQUES, BOLINHAS/ANÉIS, DRAG & DROP, PROMOÇÃO LICHESS) ===
         private Point BoardToScreenSquareTopLeft(int col, int row)
         {
             int displayCol = isBoardFlipped ? (7 - col) : col;
@@ -2117,22 +2528,17 @@ namespace XadrezApp
 
             EnsureScaledPieceCache();
 
-            using var coordFont = new Font("Segoe UI", Math.Max(7.5f, squareSize * 0.14f), FontStyle.Bold);
-            using var coordBrush = new SolidBrush(Color.FromArgb(65, 65, 65));
-
-            for (int i = 0; i < 8; i++)
-            {
-                int fileIdx = isBoardFlipped ? (7 - i) : i;
-                int rankNum = isBoardFlipped ? (i + 1) : (8 - i);
-
-                string file = ((char)('a' + fileIdx)).ToString();
-                string rank = rankNum.ToString();
-
-                g.DrawString(file, coordFont, coordBrush, boardOriginX + i * squareSize + squareSize / 2f - 5, boardOriginY + squareSize * 8 + 3);
-                g.DrawString(rank, coordFont, coordBrush, Math.Max(3, boardOriginX - 16), boardOriginY + i * squareSize + squareSize / 2f - 7);
-            }
-
             Point? checkedKingSq = boardState.GetCheckedKingSquare();
+
+            using var coordFont = new Font("Segoe UI", Math.Max(7.25f, squareSize * 0.145f), FontStyle.Bold);
+            Color coordOnLightColor = currentTheme == "Preto e Branco"
+                ? Color.FromArgb(95, 95, 95)
+                : darkColor;
+            Color coordOnDarkColor = currentTheme == "Branco e Verde"
+                ? Color.FromArgb(235, 248, 238)
+                : lightColor;
+            using var coordOnLightBrush = new SolidBrush(coordOnLightColor);
+            using var coordOnDarkBrush = new SolidBrush(coordOnDarkColor);
 
             using var lightBrush = new SolidBrush(lightColor);
             using var darkBrush = new SolidBrush(darkColor);
@@ -2143,8 +2549,12 @@ namespace XadrezApp
             using var checkPen = new Pen(Color.FromArgb(245, 150, 0, 0), 2.5f);
             using var markBrush = new SolidBrush(Color.FromArgb(150, 235, 65, 50));
             using var preBrush = new SolidBrush(Color.FromArgb(150, 50, 140, 240));
+            using var dragTargetBrush = new SolidBrush(Color.FromArgb(115, 65, 195, 90));
+            using var dragTargetPen = new Pen(Color.FromArgb(235, 25, 145, 50), 2.5f);
             using var dotBrush = new SolidBrush(Color.FromArgb(135, 30, 45, 35));
             using var ringPen = new Pen(Color.FromArgb(150, 30, 45, 35), Math.Max(3.5f, squareSize * 0.085f));
+
+            bool isSlideAnimActive = animFromSquare.HasValue && animToSquare.HasValue && animPieceChar != '.' && !IsReviewingHistory;
 
             for (int r = 0; r < 8; r++)
             {
@@ -2170,6 +2580,13 @@ namespace XadrezApp
                         g.FillRectangle(selectedBrush, x, y, squareSize, squareSize);
                     }
 
+                    // 2b. Destaque da casa sob o cursor durante o arrasto quando é um destino legal
+                    if (isDraggingPiece && dragHoverSquare.HasValue && dragHoverSquare.Value == pt && legalMoves.Contains(pt))
+                    {
+                        g.FillRectangle(dragTargetBrush, x, y, squareSize, squareSize);
+                        g.DrawRectangle(dragTargetPen, x + 1, y + 1, squareSize - 2, squareSize - 2);
+                    }
+
                     // 3. Destaque do Rei em xeque
                     if (checkedKingSq.HasValue && checkedKingSq.Value == pt)
                     {
@@ -2189,16 +2606,33 @@ namespace XadrezApp
                         g.FillRectangle(preBrush, x, y, squareSize, squareSize);
                     }
 
-                    // 6. Peça na casa (oculta na casa de origem enquanto está sendo arrastada pelo mouse)
+                    // Coordenadas desenhadas dentro das casas (fileira no canto superior esquerdo e coluna no canto inferior esquerdo)
+                    int displayCol = isBoardFlipped ? (7 - c) : c;
+                    int displayRow = isBoardFlipped ? (7 - r) : r;
+                    Brush cBrush = isLight ? coordOnLightBrush : coordOnDarkBrush;
+
+                    if (displayCol == 0)
+                    {
+                        string rankStr = (8 - r).ToString();
+                        g.DrawString(rankStr, coordFont, cBrush, x + 2, y + 1);
+                    }
+                    if (displayRow == 7)
+                    {
+                        string fileStr = ((char)('a' + c)).ToString();
+                        g.DrawString(fileStr, coordFont, cBrush, x + 2, y + squareSize - coordFont.Height - 1);
+                    }
+
+                    // 6. Peça na casa (oculta na origem durante arrasto ou no destino durante animação de deslize)
                     char piece = boardState.Board[r, c];
                     bool isBeingDraggedFromHere = isDraggingPiece && dragOriginSquare.HasValue && dragOriginSquare.Value == pt;
-                    if (piece != '.' && !isBeingDraggedFromHere)
+                    bool isAnimatingToHere = isSlideAnimActive && animToSquare!.Value == pt;
+                    if (piece != '.' && !isBeingDraggedFromHere && !isAnimatingToHere)
                     {
                         DrawPieceAtScreen(g, boardState, piece, r, c, x, y);
                     }
 
                     // 7. Destinos legais como bolinhas (casa vazia) ou anéis (captura / en passant)
-                    if (legalMoves.Contains(pt))
+                    if (!activePromotionTarget.HasValue && legalMoves.Contains(pt))
                     {
                         bool isCapture = boardState.IsCaptureDestination(selectedSquare, pt);
                         if (isCapture)
@@ -2215,13 +2649,24 @@ namespace XadrezApp
                 }
             }
 
+            // Animação suave de deslize da peça (origem -> destino em ~125 ms)
+            if (isSlideAnimActive)
+            {
+                double t = Math.Clamp(animStopwatch.Elapsed.TotalMilliseconds / MoveAnimationDurationMs, 0.0, 1.0);
+                double eased = 1.0 - Math.Pow(1.0 - t, 3);
+                Point startTl = BoardToScreenSquareTopLeft(animFromSquare!.Value.X, animFromSquare.Value.Y);
+                Point endTl = BoardToScreenSquareTopLeft(animToSquare!.Value.X, animToSquare.Value.Y);
+                int curX = (int)Math.Round(startTl.X + (endTl.X - startTl.X) * eased);
+                int curY = (int)Math.Round(startTl.Y + (endTl.Y - startTl.Y) * eased);
+                DrawPieceAtScreen(g, boardState, animPieceChar, animToSquare.Value.Y, animToSquare.Value.X, curX, curY);
+            }
+
             foreach (var arrow in drawnArrows)
                 DrawBoardArrow(g, arrow.from, arrow.to, Color.FromArgb(200, 55, 70, 75));
 
             if (hintArrow.HasValue)
                 DrawBoardArrow(g, hintArrow.Value.from, hintArrow.Value.to, Color.FromArgb(215, 30, 160, 50));
 
-            // Desenha a peça sendo arrastada sob o cursor do mouse
             if (isDraggingPiece && dragOriginSquare.HasValue)
             {
                 Point orig = dragOriginSquare.Value;
@@ -2232,6 +2677,51 @@ namespace XadrezApp
                     int drawY = dragCurrentScreenPt.Y - squareSize / 2;
                     DrawPieceAtScreen(g, boardState, draggedPiece, orig.Y, orig.X, drawX, drawY);
                 }
+            }
+
+            // 8. Seletor de promoção estilo Lichess desenhado diretamente sobre a casa de destino
+            if (activePromotionTarget.HasValue)
+            {
+                DrawPromotionOverlayOnBoard(g, boardState, activePromotionTarget.Value);
+            }
+        }
+
+        private void DrawPromotionOverlayOnBoard(Graphics g, ChessRules boardState, Point targetSquare)
+        {
+            using var dimBrush = new SolidBrush(Color.FromArgb(115, 18, 18, 22));
+            g.FillRectangle(dimBrush, boardOriginX, boardOriginY, squareSize * 8, squareSize * 8);
+
+            using var cardNormalBrush = new SolidBrush(Color.FromArgb(245, 250, 248, 240));
+            using var cardHoverBrush = new SolidBrush(Color.FromArgb(255, 255, 232, 148));
+            using var borderPen = new Pen(Color.FromArgb(230, 55, 90, 130), 2f);
+            using var keyFont = new Font("Segoe UI", Math.Max(7f, squareSize * 0.13f), FontStyle.Bold);
+            using var keyBrush = new SolidBrush(Color.FromArgb(50, 70, 95));
+
+            for (int i = 0; i < PromotionChoices.Length; i++)
+            {
+                Point optSq = GetPromotionOptionBoardSquare(targetSquare, i);
+                Point tl = BoardToScreenSquareTopLeft(optSq.X, optSq.Y);
+
+                bool hovered = (promotionHoverIndex == i);
+                g.FillRectangle(hovered ? cardHoverBrush : cardNormalBrush, tl.X + 1, tl.Y + 1, squareSize - 2, squareSize - 2);
+                g.DrawEllipse(borderPen, tl.X + 3, tl.Y + 3, squareSize - 6, squareSize - 6);
+
+                char pieceChar = activePromotionIsWhite
+                    ? char.ToUpper(PromotionChoices[i].code)
+                    : char.ToLower(PromotionChoices[i].code);
+                string imgKey = $"{pieceChar}1";
+
+                if (scaledPieceCache.TryGetValue(imgKey, out Bitmap? bmp))
+                {
+                    int pad = (squareSize - bmp.Width) / 2;
+                    g.DrawImage(bmp, tl.X + pad, tl.Y + pad, bmp.Width, bmp.Height);
+                }
+                else
+                {
+                    DrawFallbackPiece(g, pieceChar, tl.X, tl.Y);
+                }
+
+                g.DrawString(PromotionChoices[i].keyHint, keyFont, keyBrush, tl.X + 4, tl.Y + 2);
             }
         }
 
@@ -2291,6 +2781,23 @@ namespace XadrezApp
         private void BoardPanel_MouseDown(object? sender, MouseEventArgs e)
         {
             var sq = ScreenToSquare(e.X, e.Y);
+
+            // Se o seletor de promoção sobre o tabuleiro estiver ativo, clique numa opção escolhe a peça e clique fora cancela
+            if (activePromotionTarget.HasValue)
+            {
+                if (e.Button == MouseButtons.Left && sq.HasValue)
+                {
+                    int idx = HitTestPromotionOptionIndex(sq.Value);
+                    if (idx >= 0)
+                    {
+                        CompletePromotionSelection(PromotionChoices[idx].code);
+                        return;
+                    }
+                }
+                CompletePromotionSelection(null);
+                return;
+            }
+
             if (!sq.HasValue) return;
 
             var clicked = sq.Value;
@@ -2311,7 +2818,6 @@ namespace XadrezApp
                     drawnArrows.Clear();
                 }
 
-                // Se estiver revisando lance passado e a partida ainda estiver ativa, volta para o ao vivo ao clicar
                 if (IsReviewingHistory)
                 {
                     if (!gameOver)
@@ -2361,13 +2867,13 @@ namespace XadrezApp
                     return;
                 }
 
-                // Se já havia uma peça selecionada e clicou num destino legal (clique-para-mover)
                 if (selectedSquare.HasValue && legalMoves.Contains(clicked))
                 {
                     var fromSq = selectedSquare.Value;
                     dragOriginSquare = null;
+                    dragHoverSquare = null;
                     isDraggingPiece = false;
-                    RunSafe(() => ExecutePlayerAndBotTurnAsync(fromSq, clicked));
+                    RunSafe(() => ExecutePlayerAndBotTurnAsync(fromSq, clicked, animateSlide: true));
                     return;
                 }
 
@@ -2377,6 +2883,7 @@ namespace XadrezApp
                     selectedSquare = clicked;
                     legalMoves = rules.GetLegalMovesForSquare(col, row, playerIsWhite);
                     dragOriginSquare = clicked;
+                    dragHoverSquare = clicked;
                     dragStartScreenPt = e.Location;
                     dragCurrentScreenPt = e.Location;
                     isDraggingPiece = false;
@@ -2386,6 +2893,7 @@ namespace XadrezApp
                     selectedSquare = null;
                     legalMoves.Clear();
                     dragOriginSquare = null;
+                    dragHoverSquare = null;
                     isDraggingPiece = false;
                 }
 
@@ -2395,6 +2903,19 @@ namespace XadrezApp
 
         private void BoardPanel_MouseMove(object? sender, MouseEventArgs e)
         {
+            if (activePromotionTarget.HasValue)
+            {
+                var sq = ScreenToSquare(e.X, e.Y);
+                int newHover = sq.HasValue ? HitTestPromotionOptionIndex(sq.Value) : -1;
+                boardPanel.Cursor = newHover >= 0 ? Cursors.Hand : Cursors.Default;
+                if (newHover != promotionHoverIndex)
+                {
+                    promotionHoverIndex = newHover;
+                    boardPanel.Invalidate();
+                }
+                return;
+            }
+
             if (e.Button == MouseButtons.Left && dragOriginSquare.HasValue && !gameOver && !isBotThinking)
             {
                 int dx = e.X - dragStartScreenPt.X;
@@ -2405,13 +2926,32 @@ namespace XadrezApp
                 if (isDraggingPiece)
                 {
                     dragCurrentScreenPt = e.Location;
+                    dragHoverSquare = ScreenToSquare(e.X, e.Y);
+                    boardPanel.Cursor = Cursors.Hand;
                     boardPanel.Invalidate();
+                    return;
                 }
+            }
+            else if (!gameOver && !isBotThinking && !IsReviewingHistory)
+            {
+                var sq = ScreenToSquare(e.X, e.Y);
+                bool mine = sq.HasValue && rules.Board[sq.Value.Y, sq.Value.X] is var p
+                            && p != '.' && char.IsUpper(p) == playerIsWhite
+                            && rules.WhiteTurn == playerIsWhite;
+                boardPanel.Cursor = (mine || (sq.HasValue && legalMoves.Contains(sq.Value)))
+                    ? Cursors.Hand : Cursors.Default;
+            }
+            else
+            {
+                boardPanel.Cursor = Cursors.Default;
             }
         }
 
         private void BoardPanel_MouseUp(object? sender, MouseEventArgs e)
         {
+            if (activePromotionTarget.HasValue)
+                return;
+
             if (e.Button == MouseButtons.Left)
             {
                 if (isDraggingPiece && dragOriginSquare.HasValue)
@@ -2419,11 +2959,12 @@ namespace XadrezApp
                     var fromSq = dragOriginSquare.Value;
                     isDraggingPiece = false;
                     dragOriginSquare = null;
+                    dragHoverSquare = null;
 
                     var dropSq = ScreenToSquare(e.X, e.Y);
                     if (dropSq.HasValue && dropSq.Value != fromSq && legalMoves.Contains(dropSq.Value))
                     {
-                        RunSafe(() => ExecutePlayerAndBotTurnAsync(fromSq, dropSq.Value));
+                        RunSafe(() => ExecutePlayerAndBotTurnAsync(fromSq, dropSq.Value, animateSlide: false));
                         return;
                     }
                     boardPanel.Invalidate();
@@ -2431,6 +2972,7 @@ namespace XadrezApp
                 else
                 {
                     dragOriginSquare = null;
+                    dragHoverSquare = null;
                     isDraggingPiece = false;
                 }
                 return;
@@ -2512,11 +3054,11 @@ namespace XadrezApp
             catch { }
         }
 
-        private async Task ExecutePlayerAndBotTurnAsync(Point from, Point to)
+        private async Task ExecutePlayerAndBotTurnAsync(Point from, Point to, bool animateSlide = true)
         {
             if (activePuzzle != null)
             {
-                HandlePuzzleMove(from, to);
+                HandlePuzzleMove(from, to, animateSlide);
                 return;
             }
 
@@ -2531,18 +3073,30 @@ namespace XadrezApp
             char movingPiece = rules.Board[from.Y, from.X];
             if (char.ToUpper(movingPiece) == 'P' && (to.Y == 0 || to.Y == 7))
             {
-                // Pausa o relógio enquanto o diálogo de promoção está aberto!
+                // Pausa o relógio e exibe o seletor de promoção sobre a casa de destino (suporta Q/R/B/N e Esc para cancelar)
                 isPromotionDialogOpen = true;
                 clockStopwatch.Stop();
+                UpdateActionButtonsState();
                 try
                 {
-                    promoPiece = PromotionDialog.AskPiece(playerIsWhite, this, pieceImages);
+                    promoPiece = await AskPromotionOnBoardAsync(to, playerIsWhite);
                 }
                 finally
                 {
                     isPromotionDialogOpen = false;
                     if (clockRunning && !gameOver && timeControlMode != "Sem Relógio")
                         clockStopwatch.Restart();
+                    UpdateActionButtonsState();
+                }
+
+                // Se o usuário cancelou a promoção (Esc ou clique fora), mantém a posição e não executa o lance!
+                if (!promoPiece.HasValue)
+                {
+                    selectedSquare = from;
+                    legalMoves = rules.GetLegalMovesForSquare(from.X, from.Y, playerIsWhite);
+                    SetStatusBanner("Promoção cancelada. Escolha outro lance.", StatusBannerKind.Info);
+                    boardPanel.Invalidate();
+                    return;
                 }
             }
 
@@ -2562,6 +3116,9 @@ namespace XadrezApp
             string playedSan = rules.ExecuteMove(from, to, promoPiece);
             bool isBookMove = StudyLibrary.IsBookMove(rules.SanMoves);
             ApplyClockIncrement(wasWhiteMove);
+            PlayMoveSoundForSan(playedSan);
+            if (animateSlide)
+                StartMoveSlideAnimation(from, to, rules.Board[to.Y, to.X]);
 
             double quickEvalWhite = EngineService.EvaluateBoardWhiteRelative(rules.Board) / 100.0;
             RecordCurrentPlySnapshot(quickEvalWhite);
@@ -2571,6 +3128,8 @@ namespace XadrezApp
             legalMoves.Clear();
             hintArrow = null;
             openingBookLabel.Text = $"Abertura: {StudyLibrary.DetectOpening(rules.SanMoves)}";
+            UpdateClockLabels();
+            UpdateActionButtonsState();
             RefreshAllVisualPanels();
 
             ListViewItem rowItem;
@@ -2661,6 +3220,7 @@ namespace XadrezApp
         private async Task RunBotTurnAsync(int generation, ListViewItem rowItem, PlayerMoveInfo? playerMove)
         {
             isBotThinking = true;
+            UpdateActionButtonsState();
             bool botIsWhite = rules.WhiteTurn;
             var sessionToken = gameSessionCts?.Token ?? CancellationToken.None;
 
@@ -2672,14 +3232,14 @@ namespace XadrezApp
                 StatusBannerKind.Info);
 
             bool botTurnCompleted = false;
+            var botTurnSw = Stopwatch.StartNew();
             try
             {
-                await Task.Delay(50);
+                await Task.Delay(30);
                 if (generation != gameGeneration || sessionToken.IsCancellationRequested) return;
 
                 int diffIdx = difficultyCombo.SelectedIndex;
 
-                // 1. Reaproveita a pré-análise em segundo plano da posição ANTES do lance do jogador (se disponível!)
                 EngineAnalysisResult? bestBefore = null;
                 ChessRules? rulesBefore = null;
                 if (playerMove != null)
@@ -2705,7 +3265,6 @@ namespace XadrezApp
                     if (generation != gameGeneration || sessionToken.IsCancellationRequested) return;
                 }
 
-                // 2. Calcula o lance do Bot e a avaliação da posição após o lance do jogador
                 var botRules = rules.Clone();
                 EngineAnalysisResult evalAfterAnalysis;
                 EngineAnalysisResult botAnalysis;
@@ -2747,7 +3306,6 @@ namespace XadrezApp
                     if (playerMove.PlyIndex >= 0 && playerMove.PlyIndex < plyEvaluations.Count)
                         plyEvaluations[playerMove.PlyIndex] = Math.Clamp(evalAfterAnalysis.EvalWhitePawns, -15.0, 15.0);
 
-                    // Só considera sacrifício brilhante se houver sacrifício material real em posição ainda não decisiva (< +3)
                     bool isRealSacrifice = EngineService.IsMaterialSacrifice(
                         rulesBefore,
                         playerMove.From,
@@ -2810,7 +3368,6 @@ namespace XadrezApp
                         coachNote));
                 }
 
-                // Confere se o lance devolvido pelo bot é legal na posição atual
                 var botMove = botAnalysis.BestMove;
                 char? botPromo = botAnalysis.Promotion;
                 if (!botMove.HasValue ||
@@ -2825,10 +3382,29 @@ namespace XadrezApp
                     botPromo = null;
                 }
 
+                // Aplica o delay configurável do lance da IA (0 ms a 1000 ms) antes de executar o movimento no tabuleiro
+                int targetDelayMs = GetTargetBotMoveDelayMs();
+                int remainingDelayMs = targetDelayMs - (int)botTurnSw.ElapsedMilliseconds;
+                if (remainingDelayMs > 0)
+                {
+                    try
+                    {
+                        await Task.Delay(remainingDelayMs, sessionToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                    if (generation != gameGeneration || sessionToken.IsCancellationRequested || gameOver)
+                        return;
+                }
+
                 int botMoveNumber = rules.FullMoveNumber;
                 char defaultBotPromo = botIsWhite ? 'Q' : 'q';
                 string botSan = rules.ExecuteMove(botMove.Value.from, botMove.Value.to, botPromo ?? defaultBotPromo);
                 ApplyClockIncrement(botIsWhite);
+                PlayMoveSoundForSan(botSan);
+                StartMoveSlideAnimation(botMove.Value.from, botMove.Value.to, rules.Board[botMove.Value.to.Y, botMove.Value.to.X]);
 
                 RecordCurrentPlySnapshot(evalAfterAnalysis.EvalWhitePawns);
                 currentDisplayedEvalWhite = evalAfterAnalysis.EvalWhitePawns;
@@ -2853,6 +3429,8 @@ namespace XadrezApp
 
                 isBotThinking = false;
                 UpdateThinkingIndicator("✔ Pronto", false);
+                UpdateClockLabels();
+                UpdateActionButtonsState();
                 openingBookLabel.Text = $"Abertura: {StudyLibrary.DetectOpening(rules.SanMoves)}";
                 RefreshAllVisualPanels();
 
@@ -2874,7 +3452,6 @@ namespace XadrezApp
                     SetStatusBanner($"IA jogou {botSan}. Sua vez ({(playerIsWhite ? "Brancas" : "Pretas")}) | Aval: {evalAfterAnalysis.EvalText}", StatusBannerKind.Info);
                 }
 
-                // Inicia imediatamente a pré-análise em segundo plano para a nova vez do jogador!
                 StartBackgroundTurnAnalysis();
                 botTurnCompleted = true;
             }
@@ -2889,6 +3466,7 @@ namespace XadrezApp
                 {
                     isBotThinking = false;
                     UpdateThinkingIndicator("✔ Pronto", false);
+                    UpdateActionButtonsState();
                     RefreshAllVisualPanels();
                 }
             }
@@ -2915,7 +3493,7 @@ namespace XadrezApp
             }
         }
 
-        private void HandlePuzzleMove(Point from, Point to)
+        private void HandlePuzzleMove(Point from, Point to, bool animateSlide = true)
         {
             if (activePuzzle == null || gameOver) return;
 
@@ -2931,21 +3509,26 @@ namespace XadrezApp
                 }
 
                 var solvedPuzzle = activePuzzle;
-                rules.ExecuteMove(from, to, 'Q');
+                string puzzleSan = rules.ExecuteMove(from, to, 'Q');
                 if (rules.GameResult == "*")
                     rules.GameResult = "1-0";
+
+                PlayMoveSoundForSan(puzzleSan.EndsWith('#') ? puzzleSan : puzzleSan + "#");
+                if (animateSlide)
+                    StartMoveSlideAnimation(from, to, rules.Board[to.Y, to.X]);
 
                 RecordCurrentPlySnapshot(99.0);
                 selectedSquare = null;
                 legalMoves.Clear();
                 hintArrow = null;
                 gameOver = true;
+                UpdateClockLabels();
+                UpdateActionButtonsState();
                 RefreshAllVisualPanels();
 
                 int currentIdx = StudyLibrary.Puzzles.IndexOf(solvedPuzzle);
                 var nextPuzzle = StudyLibrary.Puzzles[(currentIdx + 1) % StudyLibrary.Puzzles.Count];
 
-                // Sem MessageBox bloqueante: mostra faixa verde de sucesso com botão direto para o próximo puzzle!
                 SetStatusBanner(
                     $"✔ PARABÉNS! Lance correto ({playedUci}) no {solvedPuzzle.Title}!",
                     StatusBannerKind.Success,
@@ -2960,8 +3543,21 @@ namespace XadrezApp
 
         private async Task RunAnalysisAndHintAsync(bool showHintArrow)
         {
-            if (gameOver && showHintArrow) return;
-            if (isBotThinking || isHintRunning) return;
+            if (gameOver && showHintArrow)
+            {
+                SetStatusBanner("A partida já terminou. Use ← / → para revisar os lances ou clique em 'Analisar'.", StatusBannerKind.Info);
+                return;
+            }
+            if (isBotThinking)
+            {
+                SetStatusBanner("Aguarde a IA terminar o lance atual antes de pedir uma dica.", StatusBannerKind.Warning);
+                return;
+            }
+            if (isHintRunning)
+            {
+                SetStatusBanner("A IA já está calculando a análise desta posição...", StatusBannerKind.Info);
+                return;
+            }
 
             var targetRules = DisplayedRules.Clone();
             int generation = gameGeneration;
@@ -2974,13 +3570,13 @@ namespace XadrezApp
             var hintToken = hintSessionCts.Token;
 
             isHintRunning = true;
+            UpdateActionButtonsState();
             UpdateThinkingIndicator("🔍 Analisando...", true);
             SetStatusBanner("Calculando o melhor lance tático/posicional para você...", StatusBannerKind.Info);
 
             EngineAnalysisResult res;
             try
             {
-                // Se já houver pré-análise em segundo plano para esta exata posição, reaproveita sem esperar!
                 if (!IsReviewingHistory && preAnalysisFen == fenAtStart && preAnalysisTask != null)
                 {
                     res = await preAnalysisTask;
@@ -3000,6 +3596,7 @@ namespace XadrezApp
                 {
                     isHintRunning = false;
                     UpdateThinkingIndicator("✔ Pronto", false);
+                    UpdateActionButtonsState();
                 }
             }
 
@@ -3115,13 +3712,13 @@ namespace XadrezApp
             return false;
         }
 
-        // Modal de Fim de Partida com opções diretas "Nova Partida" e "Revisar Partida"
         private void ShowEndGameDialog(string title, string detail)
         {
             using var dialog = new Form
             {
                 Text = title,
-                ClientSize = new Size(460, 265),
+                AutoScaleMode = AutoScaleMode.Dpi,
+                ClientSize = new Size(560, 310),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = FormStartPosition.CenterParent,
                 MaximizeBox = false,
@@ -3130,20 +3727,54 @@ namespace XadrezApp
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular)
             };
 
+            string scoreDisplay = rules.GameResult switch
+            {
+                "1-0" => "1 - 0",
+                "0-1" => "0 - 1",
+                "1/2-1/2" => "½ - ½",
+                _ => "—"
+            };
+
+            var headerPanel = new TableLayoutPanel
+            {
+                Dock = DockStyle.Top,
+                Height = 52,
+                ColumnCount = 2,
+                RowCount = 1,
+                Padding = new Padding(14, 8, 14, 4)
+            };
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72f));
+            headerPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28f));
+
             var lblTitle = new Label
             {
                 Text = title,
-                Location = new Point(16, 14),
-                AutoSize = true,
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleLeft,
                 Font = new Font("Segoe UI", 12f, FontStyle.Bold),
-                ForeColor = Color.FromArgb(30, 55, 90)
+                ForeColor = Color.FromArgb(30, 55, 90),
+                AutoEllipsis = true
             };
+
+            var lblScoreBadge = new Label
+            {
+                Text = $"Placar: {scoreDisplay}",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+                BackColor = Color.FromArgb(38, 62, 94),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(6, 2, 0, 2)
+            };
+
+            headerPanel.Controls.Add(lblTitle, 0, 0);
+            headerPanel.Controls.Add(lblScoreBadge, 1, 0);
 
             var txtDetail = new TextBox
             {
                 Text = detail.Replace("\n", Environment.NewLine),
-                Location = new Point(16, 46),
-                Size = new Size(428, 154),
+                Dock = DockStyle.Fill,
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
@@ -3152,28 +3783,43 @@ namespace XadrezApp
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular)
             };
 
-            var btnNewGame = new Button
+            var contentWrapper = new Panel
             {
-                Text = "Nova Partida",
-                Location = new Point(116, 212),
-                Size = new Size(155, 38),
-                FlatStyle = FlatStyle.System,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Dock = DockStyle.Fill,
+                Padding = new Padding(14, 4, 14, 6)
+            };
+            contentWrapper.Controls.Add(txtDetail);
+
+            var footerFlow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 52,
+                FlowDirection = FlowDirection.RightToLeft,
+                WrapContents = false,
+                Padding = new Padding(12, 6, 12, 8),
+                BackColor = Color.FromArgb(238, 235, 224)
             };
 
-            var btnReview = new Button
+            Button CreateDialogBtn(string text, int width, bool bold = false)
             {
-                Text = "Revisar Partida",
-                Location = new Point(285, 212),
-                Size = new Size(159, 38),
-                FlatStyle = FlatStyle.System,
-                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
+                return new Button
+                {
+                    Text = text,
+                    Size = new Size(width, 36),
+                    Margin = new Padding(4, 0, 4, 0),
+                    FlatStyle = FlatStyle.System,
+                    Font = new Font("Segoe UI", 8.75f, bold ? FontStyle.Bold : FontStyle.Regular),
+                    Cursor = Cursors.Hand
+                };
+            }
+
+            var btnReview = CreateDialogBtn("Revisar Partida (Esc)", 142, bold: true);
+            var btnNewGameDialog = CreateDialogBtn("Nova Partida", 116, bold: true);
+            var btnAccuracy = CreateDialogBtn("Relatório de Precisão", 142);
+            var btnCopyPgn = CreateDialogBtn("Copiar PGN", 104);
 
             bool startNew = false;
-            btnNewGame.Click += (s, e) =>
+            btnNewGameDialog.Click += (s, e) =>
             {
                 startNew = true;
                 dialog.DialogResult = DialogResult.OK;
@@ -3185,12 +3831,34 @@ namespace XadrezApp
                 dialog.DialogResult = DialogResult.Cancel;
                 dialog.Close();
             };
+            btnAccuracy.Click += (s, e) =>
+            {
+                string summary = BuildGameAccuracySummaryText();
+                txtDetail.Text = summary.Replace("\n", Environment.NewLine);
+            };
+            btnCopyPgn.Click += (s, e) =>
+            {
+                string engineName = engine.IsUsingStockfish ? "Stockfish IA" : "Engine Tática Interna";
+                string whiteName = playerIsWhite ? "Jogador" : engineName;
+                string blackName = playerIsWhite ? engineName : "Jogador";
+                string pgn = rules.ToPgn(blackPlayerName: blackName, whitePlayerName: whiteName);
+                if (TrySetClipboardText(pgn, out _))
+                {
+                    btnCopyPgn.Text = "✔ Copiado!";
+                    SetStatusBanner("PGN da partida copiado para a área de transferência!", StatusBannerKind.Success);
+                }
+            };
 
-            dialog.Controls.Add(lblTitle);
-            dialog.Controls.Add(txtDetail);
-            dialog.Controls.Add(btnNewGame);
-            dialog.Controls.Add(btnReview);
+            footerFlow.Controls.Add(btnReview);
+            footerFlow.Controls.Add(btnNewGameDialog);
+            footerFlow.Controls.Add(btnAccuracy);
+            footerFlow.Controls.Add(btnCopyPgn);
+
+            dialog.Controls.Add(contentWrapper);
+            dialog.Controls.Add(headerPanel);
+            dialog.Controls.Add(footerFlow);
             dialog.AcceptButton = btnReview;
+            dialog.CancelButton = btnReview;
 
             dialog.ShowDialog(this);
 
@@ -3204,8 +3872,103 @@ namespace XadrezApp
             }
         }
 
+        private void ShowHelpAndShortcutsDialog()
+        {
+            using var dialog = new Form
+            {
+                Text = "Atalhos de Teclado e Dicas de Uso",
+                AutoScaleMode = AutoScaleMode.Dpi,
+                ClientSize = new Size(580, 420),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(245, 243, 235),
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular)
+            };
+
+            var lblHeader = new Label
+            {
+                Text = "Guia Rápido de Atalhos e Recursos Interativos",
+                Dock = DockStyle.Top,
+                Height = 38,
+                Padding = new Padding(14, 10, 14, 0),
+                Font = new Font("Segoe UI", 11.5f, FontStyle.Bold),
+                ForeColor = Color.FromArgb(30, 55, 90)
+            };
+
+            string helpText =
+                "=== ATALHOS DE TECLADO ===\r\n" +
+                "• Ctrl + N : Iniciar Novo Jogo Clássico\r\n" +
+                "• Ctrl + Z : Voltar / Desfazer o último par de lances\r\n" +
+                "• F1 (ou Ctrl + H) : Pedir Dica da IA (desenha seta verde da melhor jogada)\r\n" +
+                "• Ctrl + F : Virar a orientação do tabuleiro\r\n" +
+                "• Ctrl + O : Importar partida PGN (arquivo ou texto colado)\r\n" +
+                "• Ctrl + S : Exportar / Salvar partida PGN\r\n" +
+                "• Setas ← e → : Navegar lance a lance pelo histórico da partida\r\n" +
+                "• Home / End : Ir para o início da partida / Voltar para a posição ao vivo\r\n" +
+                "• Q, R, B, N (ou 1–4) : Escolher peça imediatamente durante a promoção de peão\r\n" +
+                "• Esc : Cancelar promoção de peão ou fechar janelas de diálogo\r\n\r\n" +
+                "=== RECURSOS AVANÇADOS DO TABULEIRO ===\r\n" +
+                "• Clique ou Arrastar e Soltar (Drag & Drop): mova peças clicando na casa de origem e destino ou arrastando a peça diretamente.\r\n" +
+                "• Premove (Jogada Antecipada): enquanto a IA está pensando, clique na sua peça e na casa de destino (destacada em azul). O lance será executado automaticamente assim que a IA responder.\r\n" +
+                "• Setas e Marcações Táticas (Botão Direito): clique com o botão direito em uma casa para demarcá-la em vermelho, ou segure e arraste com o botão direito entre duas casas para desenhar setas de plano. Um clique esquerdo limpa as anotações.\r\n" +
+                "• Revisão Interativa e Gráfico de Vantagem: clique em qualquer lance da tabela de histórico ou arraste sobre o Gráfico de Vantagem para inspecionar a posição e a avaliação da IA naquele momento.";
+
+            var txtHelp = new TextBox
+            {
+                Text = helpText,
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BackColor = Color.FromArgb(253, 252, 248),
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 9f, FontStyle.Regular),
+                SelectionStart = 0,
+                SelectionLength = 0
+            };
+
+            var bodyPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                Padding = new Padding(14, 6, 14, 6)
+            };
+            bodyPanel.Controls.Add(txtHelp);
+
+            var bottomPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 48,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(14, 6, 14, 6),
+                BackColor = Color.FromArgb(238, 235, 224)
+            };
+
+            var btnClose = new Button
+            {
+                Text = "Fechar (Esc)",
+                Size = new Size(120, 34),
+                FlatStyle = FlatStyle.System,
+                Font = new Font("Segoe UI", 9f, FontStyle.Bold),
+                Cursor = Cursors.Hand,
+                DialogResult = DialogResult.OK
+            };
+            bottomPanel.Controls.Add(btnClose);
+
+            dialog.Controls.Add(bodyPanel);
+            dialog.Controls.Add(lblHeader);
+            dialog.Controls.Add(bottomPanel);
+            dialog.AcceptButton = btnClose;
+            dialog.CancelButton = btnClose;
+
+            dialog.ShowDialog(this);
+        }
+
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            CompletePromotionSelection(null);
+            StopMoveSlideAnimation();
             gameGeneration++;
             hintGeneration++;
             try { gameSessionCts?.Cancel(); } catch { }
@@ -3215,6 +3978,19 @@ namespace XadrezApp
             {
                 clockTimer?.Stop();
                 clockTimer?.Dispose();
+            }
+            catch { }
+
+            try
+            {
+                animTimer?.Stop();
+                animTimer?.Dispose();
+            }
+            catch { }
+
+            try
+            {
+                mainToolTip?.Dispose();
             }
             catch { }
 

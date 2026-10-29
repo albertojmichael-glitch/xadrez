@@ -8,9 +8,9 @@ namespace XadrezApp.Tests
     public class StudyLibraryTests
     {
         [Fact]
-        public void All15Puzzles_ShouldHaveValidFenAndLegalSolutionMove()
+        public void All30Puzzles_ShouldHaveValidFenAndLegalSolutionMove()
         {
-            Assert.Equal(15, StudyLibrary.Puzzles.Count);
+            Assert.Equal(30, StudyLibrary.Puzzles.Count);
 
             foreach (var puzzle in StudyLibrary.Puzzles)
             {
@@ -50,6 +50,15 @@ namespace XadrezApp.Tests
             var sicilian = new List<string> { "e4", "c5" };
             Assert.Equal("B20: Defesa Siciliana", StudyLibrary.DetectOpening(sicilian));
 
+            var dragon = new List<string> { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "g6" };
+            Assert.Equal("B70: Defesa Siciliana (Variante do Dragão)", StudyLibrary.DetectOpening(dragon));
+
+            var catalan = new List<string> { "d4", "Nf6", "c4", "e6", "g3" };
+            Assert.Equal("E00: Abertura Catalã", StudyLibrary.DetectOpening(catalan));
+
+            var grunfeld = new List<string> { "d4", "Nf6", "c4", "g6", "Nc3", "d5" };
+            Assert.Equal("D80: Defesa Grünfeld", StudyLibrary.DetectOpening(grunfeld));
+
             var custom = new List<string> { "a3", "a6" };
             Assert.Equal("Meio-Jogo / Variante Livre", StudyLibrary.DetectOpening(custom));
         }
@@ -59,6 +68,7 @@ namespace XadrezApp.Tests
         {
             Assert.False(StudyLibrary.IsBookMove(new List<string>()));
             Assert.True(StudyLibrary.IsBookMove(new List<string> { "e4", "e5", "Nf3" }));
+            Assert.True(StudyLibrary.IsBookMove(new List<string> { "d4", "Nf6", "c4", "g6", "Nc3", "d5" }));
             Assert.False(StudyLibrary.IsBookMove(new List<string> { "h4", "h5" }));
 
             // Mais de 10 meio-lances deve retornar false

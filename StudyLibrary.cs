@@ -13,33 +13,121 @@ namespace XadrezApp
 
     public static class StudyLibrary
     {
+        // Livro de Aberturas ordenado da linha mais específica (maior número de lances) para a mais geral
         private static readonly List<(string[] moves, string name)> Openings = new()
         {
-            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5" }, "C60: Abertura Espanhola (Ruy Lopez)"),
-            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5" }, "C50: Abertura Italiana (Giuoco Piano)"),
-            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Nf6" }, "C55: Defesa dos Dois Cavalos"),
-            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4" }, "C50: Abertura Italiana"),
-            (new[] { "e4", "e5", "Nf3", "Nc6", "d4" }, "C44: Abertura Escocesa"),
-            (new[] { "e4", "e5", "f4" }, "C30: Gambito do Rei"),
-            (new[] { "e4", "e5", "Nf3" }, "C40: Abertura do Cavalo do Rei"),
+            // === DEFESA SICILIANA (B20-B99) ===
             (new[] { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6" }, "B90: Defesa Siciliana (Variante Najdorf)"),
+            (new[] { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "g6" }, "B70: Defesa Siciliana (Variante do Dragão)"),
+            (new[] { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "e6" }, "B80: Defesa Siciliana (Variante Scheveningen)"),
+            (new[] { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "Nc6" }, "B56: Defesa Siciliana (Variante Clássica)"),
+            (new[] { "e4", "c5", "Nf3", "Nc6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "e5" }, "B33: Defesa Siciliana (Variante Sveshnikov)"),
+            (new[] { "e4", "c5", "Nf3", "Nc6", "d4", "cxd4", "Nxd4", "g6" }, "B34: Defesa Siciliana (Dragão Acelerado)"),
+            (new[] { "e4", "c5", "Nf3", "e6", "d4", "cxd4", "Nxd4", "a6" }, "B41: Defesa Siciliana (Variante Kan)"),
+            (new[] { "e4", "c5", "Nf3", "e6", "d4", "cxd4", "Nxd4", "Nc6" }, "B45: Defesa Siciliana (Variante Taimanov)"),
+            (new[] { "e4", "c5", "Nf3", "Nc6", "Bb5" }, "B30: Defesa Siciliana (Ataque Rossolimo)"),
+            (new[] { "e4", "c5", "Nf3", "d6", "Bb5" }, "B51: Defesa Siciliana (Ataque Moscou)"),
+            (new[] { "e4", "c5", "Nc3", "Nc6", "f4" }, "B23: Defesa Siciliana (Ataque Grand Prix)"),
+            (new[] { "e4", "c5", "d4", "cxd4", "c3" }, "B21: Defesa Siciliana (Gambito Smith-Morra)"),
+            (new[] { "e4", "c5", "c3" }, "B22: Defesa Siciliana (Variante Alapin)"),
+            (new[] { "e4", "c5", "Nc3" }, "B23: Defesa Siciliana Fechada"),
             (new[] { "e4", "c5", "Nf3" }, "B27: Defesa Siciliana"),
             (new[] { "e4", "c5" }, "B20: Defesa Siciliana"),
+
+            // === ABERTURA ESPANHOLA / RUY LOPEZ E ABERTURAS ABERTAS (C20-C99) ===
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6", "O-O", "Be7" }, "C84: Ruy Lopez (Variante Fechada)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4", "Nf6", "O-O", "Nxe4" }, "C80: Ruy Lopez (Variante Aberta)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Bxc6" }, "C68: Ruy Lopez (Variante das Trocas)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "a6", "Ba4" }, "C70: Ruy Lopez (Defesa Morphy)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "Nf6" }, "C65: Ruy Lopez (Defesa Berlim)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "d6" }, "C62: Ruy Lopez (Defesa Steinitz)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5", "f5" }, "C63: Ruy Lopez (Gambito Schliemann / Jaenisch)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bb5" }, "C60: Abertura Espanhola (Ruy Lopez)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "b4" }, "C51: Abertura Italiana (Gambito Evans)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5", "c3", "Nf6", "d3" }, "C50: Abertura Italiana (Giuoco Pianissimo)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Bc5" }, "C50: Abertura Italiana (Giuoco Piano)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Nf6", "Ng5", "d5", "exd5", "Nxd5" }, "C57: Defesa dos Dois Cavalos (Ataque Fried Liver / Fegatello)"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4", "Nf6" }, "C55: Defesa dos Dois Cavalos"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Bc4" }, "C50: Abertura Italiana"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Nc3", "Nf6" }, "C47: Abertura dos Quatro Cavalos"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "Nc3" }, "C46: Abertura dos Três Cavalos"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "d4", "exd4", "Bc4" }, "C44: Gambito Escocês"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "d4", "exd4", "Nxd4" }, "C45: Abertura Escocesa Clássica"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "d4" }, "C44: Abertura Escocesa"),
+            (new[] { "e4", "e5", "Nf3", "Nc6", "c3" }, "C44: Abertura Ponziani"),
+            (new[] { "e4", "e5", "Nf3", "Nf6" }, "C42: Defesa Russa (Petrov)"),
+            (new[] { "e4", "e5", "Nf3", "d6" }, "C41: Defesa Philidor"),
+            (new[] { "e4", "e5", "Nf3", "f5" }, "C40: Gambito Letão"),
+            (new[] { "e4", "e5", "f4", "exf4" }, "C33: Gambito do Rei Aceito"),
+            (new[] { "e4", "e5", "f4", "Bc5" }, "C30: Gambito do Rei Recusado"),
+            (new[] { "e4", "e5", "f4" }, "C30: Gambito do Rei"),
+            (new[] { "e4", "e5", "Nc3" }, "C25: Abertura Vienense"),
+            (new[] { "e4", "e5", "Bc4" }, "C23: Abertura do Bispo"),
+            (new[] { "e4", "e5", "d4", "exd4", "c3" }, "C21: Gambito Nórdico (Dinamarquês)"),
+            (new[] { "e4", "e5", "d4", "exd4", "Qxd4" }, "C22: Abertura do Centro"),
+            (new[] { "e4", "e5", "Nf3" }, "C40: Abertura do Cavalo do Rei"),
+
+            // === DEFESA FRANCESA, CARO-KANN E OUTRAS SEMIABERTAS ===
+            (new[] { "e4", "e6", "d4", "d5", "Nc3", "Bb4" }, "C15: Defesa Francesa (Variante Winawer)"),
+            (new[] { "e4", "e6", "d4", "d5", "Nc3", "Nf6" }, "C11: Defesa Francesa (Variante Clássica)"),
+            (new[] { "e4", "e6", "d4", "d5", "Nd2" }, "C03: Defesa Francesa (Variante Tarrasch)"),
+            (new[] { "e4", "e6", "d4", "d5", "e5" }, "C02: Defesa Francesa (Variante do Avanço)"),
+            (new[] { "e4", "e6", "d4", "d5", "exd5" }, "C01: Defesa Francesa (Variante das Trocas)"),
             (new[] { "e4", "e6", "d4", "d5" }, "C00: Defesa Francesa"),
             (new[] { "e4", "e6" }, "C00: Defesa Francesa"),
+            (new[] { "e4", "c6", "d4", "d5", "Nc3", "dxe4", "Nxe4", "Bf5" }, "B18: Defesa Caro-Kann (Variante Clássica)"),
+            (new[] { "e4", "c6", "d4", "d5", "e5" }, "B12: Defesa Caro-Kann (Variante do Avanço)"),
+            (new[] { "e4", "c6", "d4", "d5", "exd5", "cxd5", "c4" }, "B13: Defesa Caro-Kann (Ataque Panov-Botvinnik)"),
+            (new[] { "e4", "c6", "d4", "d5", "exd5" }, "B13: Defesa Caro-Kann (Variante das Trocas)"),
             (new[] { "e4", "c6", "d4", "d5" }, "B12: Defesa Caro-Kann"),
             (new[] { "e4", "c6" }, "B10: Defesa Caro-Kann"),
+            (new[] { "e4", "d5", "exd5", "Qxd5", "Nc3", "Qa5" }, "B01: Defesa Escandinava Clássica"),
             (new[] { "e4", "d5" }, "B01: Defesa Escandinava"),
-            (new[] { "d4", "Nf6", "Bf4" }, "A45: Sistema Londres"),
-            (new[] { "d4", "d5", "Bf4" }, "D00: Sistema Londres Clássico"),
+            (new[] { "e4", "d6", "d4", "Nf6", "Nc3", "g6" }, "B07: Defesa Pirc"),
+            (new[] { "e4", "g6", "d4", "Bg7" }, "B06: Defesa Moderna (Robatsch)"),
+            (new[] { "e4", "Nf6", "e5", "Nd5" }, "B02: Defesa Alekhine"),
+            (new[] { "e4", "Nf6" }, "B02: Defesa Alekhine"),
+            (new[] { "e4", "Nc6" }, "B00: Defesa Nimzowitsch"),
+
+            // === GAMBITO DA DAMA, SISTEMAS DE D4 E DEFESAS ÍNDIAS (D00-E99) ===
+            (new[] { "d4", "d5", "c4", "c6", "Nf3", "Nf6", "Nc3", "e6" }, "D43: Defesa Semi-Eslava"),
+            (new[] { "d4", "d5", "c4", "e6", "Nc3", "Nf6" }, "D37: Gambito da Dama Recusado (Ortodoxa)"),
+            (new[] { "d4", "d5", "c4", "e6", "Nc3", "c5" }, "D32: Defesa Tarrasch"),
             (new[] { "d4", "d5", "c4", "e6" }, "D30: Gambito da Dama Recusado"),
             (new[] { "d4", "d5", "c4", "dxc4" }, "D20: Gambito da Dama Aceito"),
             (new[] { "d4", "d5", "c4", "c6" }, "D10: Defesa Eslava"),
+            (new[] { "d4", "d5", "c4", "e5" }, "D08: Contragambito Albin"),
             (new[] { "d4", "d5", "c4" }, "D06: Gambito da Dama"),
+            (new[] { "d4", "d5", "Nf3", "Nf6", "e3" }, "D05: Sistema Colle"),
+            (new[] { "d4", "d5", "Bf4" }, "D00: Sistema Londres Clássico"),
+            (new[] { "d4", "d5", "e4" }, "D00: Gambito Blackmar-Diemer"),
+            (new[] { "d4", "Nf6", "c4", "g6", "Nc3", "Bg7", "e4", "d6" }, "E70: Defesa Índia do Rei Clássica"),
             (new[] { "d4", "Nf6", "c4", "g6", "Nc3", "Bg7" }, "E60: Defesa Índia do Rei"),
+            (new[] { "d4", "Nf6", "c4", "g6", "Nc3", "d5" }, "D80: Defesa Grünfeld"),
             (new[] { "d4", "Nf6", "c4", "e6", "Nc3", "Bb4" }, "E20: Defesa Nimzo-Índia"),
+            (new[] { "d4", "Nf6", "c4", "e6", "Nf3", "b6" }, "E12: Defesa Índia da Dama"),
+            (new[] { "d4", "Nf6", "c4", "e6", "Nf3", "Bb4" }, "E11: Defesa Bogo-Índia"),
+            (new[] { "d4", "Nf6", "c4", "e6", "g3" }, "E00: Abertura Catalã"),
+            (new[] { "d4", "Nf6", "c4", "c5", "d5", "e6" }, "A60: Defesa Benoni Moderna"),
+            (new[] { "d4", "Nf6", "c4", "c5", "d5", "b5" }, "A57: Gambito Benko (Volga)"),
+            (new[] { "d4", "Nf6", "c4", "e5" }, "A51: Gambito Budapeste"),
+            (new[] { "d4", "Nf6", "c4", "d6" }, "A53: Defesa Índia Antiga"),
+            (new[] { "d4", "Nf6", "Nf3", "e6", "Bg5" }, "A46: Ataque Torre"),
+            (new[] { "d4", "Nf6", "Bg5" }, "A45: Ataque Trompowsky"),
+            (new[] { "d4", "Nf6", "Bf4" }, "A45: Sistema Londres"),
+            (new[] { "d4", "f5" }, "A80: Defesa Holandesa"),
+
+            // === ABERTURAS DE FLANCO (A00-A39) ===
+            (new[] { "c4", "c5" }, "A30: Abertura Inglesa (Variante Simétrica)"),
+            (new[] { "c4", "e5" }, "A20: Abertura Inglesa (Siciliana Invertida)"),
             (new[] { "c4" }, "A10: Abertura Inglesa"),
-            (new[] { "Nf3" }, "A04: Abertura Réti")
+            (new[] { "Nf3", "d5", "c4" }, "A09: Abertura Réti"),
+            (new[] { "Nf3", "d5", "g3" }, "A07: Ataque Índio do Rei"),
+            (new[] { "Nf3" }, "A04: Abertura Réti"),
+            (new[] { "f4" }, "A02: Abertura Bird"),
+            (new[] { "b3" }, "A01: Abertura Nimzo-Larsen"),
+            (new[] { "b4" }, "A00: Abertura Sokolsky (Orangotango)"),
+            (new[] { "g3" }, "A00: Abertura Benko / Fianchetto do Rei")
         };
 
         public static string DetectOpening(List<string> sanMoves)
@@ -94,7 +182,7 @@ namespace XadrezApp
             return false;
         }
 
-        // 15 Quebra-Cabeças Táticos (Puzzles)
+        // 30 Quebra-Cabeças Táticos (Puzzles) de Brancas e de Pretas
         public static readonly List<TacticalPuzzle> Puzzles = new()
         {
             new TacticalPuzzle
@@ -216,6 +304,126 @@ namespace XadrezApp
                 Fen = "6k1/3P1ppp/8/8/8/8/5PPP/6K1 w - - 0 1",
                 SolutionUci = "d7d8",
                 Hint = "Avance o peão passado de d7 para d8 promovendo para Dama com mate no corredor!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #16: Mate de Lolli (Infiltração em g7)",
+                Theme = "Dama e Peão Avançado",
+                Fen = "5rk1/5p2/5PpQ/7p/8/8/6PP/6K1 w - - 0 1",
+                SolutionUci = "h6g7",
+                Hint = "O peão avançado em f6 apoia a casa escura g7. Infiltre a Dama em g7 para dar xeque-mate!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #17: Mate de Greco na Coluna h",
+                Theme = "Bispo Cortando a Fuga + Dama",
+                Fen = "5r1k/6p1/8/8/2B2Q2/8/6PP/6K1 w - - 0 1",
+                SolutionUci = "f4h4",
+                Hint = "O Bispo em c4 vigia a casa g8 e o peão preto bloqueia g7. Leve a Dama para h4 dando mate na coluna h!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #18: Ataque Descoberto Ganhando a Dama",
+                Theme = "Xeque Descoberto na Coluna d",
+                Fen = "4k3/8/8/3q4/8/3B4/8/3R2K1 w - - 0 1",
+                SolutionUci = "d3b5",
+                Hint = "Dê xeque com o Bispo em b5 para abrir a linha da sua Torre de d1 contra a Dama preta em d5!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #19: Mate com Cravada na Coluna h",
+                Theme = "Cavalo + Bispo + Torre Cravando",
+                Fen = "7k/6pp/8/4N3/8/1B6/6PP/6KR w - - 0 1",
+                SolutionUci = "e5g6",
+                Hint = "Salte com o Cavalo para g6! O peão de h7 não pode capturar porque está cravado pela Torre de h1."
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #20: O Beijo da Morte (Dama + Rei)",
+                Theme = "Mate de Dama Apoiada pelo Rei",
+                Fen = "7k/8/6K1/8/8/8/1Q6/8 w - - 0 1",
+                SolutionUci = "b2g7",
+                Hint = "Seu Rei em g6 está em oposição próxima ao Rei adversário. Leve a Dama até g7 para o mate!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #21: Mate da Escadinha (Duas Torres)",
+                Theme = "Coordenação de Torres na 7ª e 8ª",
+                Fen = "7k/1R6/8/8/8/8/8/R5K1 w - - 0 1",
+                SolutionUci = "a1a8",
+                Hint = "A Torre em b7 já impede o Rei preto de descer para a 7ª fileira. Complete a escadinha com Ta8#!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #22: Mate do Corredor de Pretas",
+                Theme = "Pretas Jogam e Dão Mate",
+                Fen = "6k1/5ppp/8/8/3r4/8/5PPP/6K1 b - - 0 1",
+                SolutionUci = "d4d1",
+                Hint = "Você está de Pretas! O Rei branco não tem respiro atrás dos peões de f2, g2 e h2. Jogue Td1#!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #23: Garfo Real de Pretas",
+                Theme = "Pretas Jogam: Ataque Duplo (Rei e Dama)",
+                Fen = "4k3/8/8/8/3n4/Q7/8/4K3 b - - 0 1",
+                SolutionUci = "d4c2",
+                Hint = "Você está de Pretas! Salte com o Cavalo para c2 dando xeque no Rei em e1 e atacando a Dama em a3!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #24: Mate Sufocado de Pretas",
+                Theme = "Pretas Jogam: Mate de Cavalo",
+                Fen = "6k1/8/8/8/5n2/8/6PP/6RK b - - 0 1",
+                SolutionUci = "f4f2",
+                Hint = "Você está de Pretas! O Rei branco em h1 está trancado pela própria Torre e peões. Jogue Cf2#!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #25: Captura de Dama Cravada",
+                Theme = "Cravada Absoluta na Coluna d",
+                Fen = "3k4/8/3q4/8/8/6B1/8/3R2K1 w - - 0 1",
+                SolutionUci = "g3d6",
+                Hint = "A Dama preta em d6 está absolutamente cravada pela sua Torre de d1. Capture-a com o Bispo!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #26: Mate de Damiano Clássico",
+                Theme = "Ataque Mortal na Coluna h",
+                Fen = "6rk/5p2/5P2/4Q3/8/8/6PP/6K1 w - - 0 1",
+                SolutionUci = "e5h5",
+                Hint = "A Torre preta em g8 bloqueia a fuga do próprio Rei e seu peão em f6 controla g7. Leve a Dama para h5!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #27: Mate de Anderssen",
+                Theme = "Torre Apoiada pelo Peão em g7",
+                Fen = "6k1/5pP1/5K2/8/8/8/8/7R w - - 0 1",
+                SolutionUci = "h1h8",
+                Hint = "O peão em g7 (protegido pelo seu Rei em f6) defende a casa h8. Leve a Torre até h8 para dar mate!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #28: Bateria na Grande Diagonal",
+                Theme = "Dama + Bispo em a1-h8",
+                Fen = "r4rk1/ppp2p1p/6p1/8/8/2Q5/PB3PPP/1K6 w - - 0 1",
+                SolutionUci = "c3g7",
+                Hint = "As casas escuras do roque preto estão enfraquecidas. Use a bateria Bispo + Dama levando a Dama a g7!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #29: Ataque Duplo de Dama nas Diagonais",
+                Theme = "Xeque + Ataque à Torre Indefesa",
+                Fen = "r5k1/7p/5pp1/8/8/8/5PPP/3Q2K1 w - - 0 1",
+                SolutionUci = "d1d5",
+                Hint = "Centralize a Dama em d5 dando xeque na diagonal d5-g8 e atacando simultaneamente a Torre em a8!"
+            },
+            new TacticalPuzzle
+            {
+                Title = "Puzzle #30: Bateria Fatal das Pretas",
+                Theme = "Pretas Jogam: Mate em g2",
+                Fen = "6k1/1b3ppp/8/8/8/5q2/5P1P/6K1 b - - 0 1",
+                SolutionUci = "f3g2",
+                Hint = "Você está de Pretas! O Bispo em b7 apoia a Dama na grande diagonal. Jogue Dg2# para dar xeque-mate!"
             }
         };
     }
