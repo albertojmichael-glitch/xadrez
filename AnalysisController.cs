@@ -33,7 +33,9 @@ namespace XadrezApp
         bool PlayedBest,
         (string badge, string description, Color color) Classification,
         string CoachNote,
-        string BestAlternativeStr);
+        string BestAlternativeStr,
+        string SecondAlternativeStr,
+        string EvalComparisonText);
 
     public class AnalysisController : IDisposable
     {
@@ -41,6 +43,7 @@ namespace XadrezApp
         public List<MoveEvaluationRecord> MoveEvaluations { get; } = new List<MoveEvaluationRecord>();
 
         public bool IsUsingStockfish => Engine.IsUsingStockfish;
+        public bool IsTeacherMode { get; set; } = false;
 
         public void StopSearch() => Engine.StopSearch();
 
@@ -119,6 +122,8 @@ namespace XadrezApp
             (string badge, string description, Color color) classification = ("", "", Color.Black);
             string coachNote = "";
             string bestAlternativeStr = "-";
+            string secondAlternativeStr = "-";
+            string evalComparisonText = "";
 
             if (playerMove != null && bestWhiteBefore != null && rulesBefore != null)
             {
@@ -143,6 +148,21 @@ namespace XadrezApp
                         bestWhiteBefore.BestMove.Value.to,
                         bestWhiteBefore.Promotion);
                 }
+
+                if (bestWhiteBefore.SecondBestMove.HasValue)
+                {
+                    string secAlg = EngineService.FormatMoveUciOrAlg(
+                        bestWhiteBefore.SecondBestMove.Value.from,
+                        bestWhiteBefore.SecondBestMove.Value.to,
+                        bestWhiteBefore.SecondBestPromotion);
+                    secondAlternativeStr = string.IsNullOrEmpty(bestWhiteBefore.SecondBestEvalText)
+                        ? secAlg
+                        : $"{secAlg} ({bestWhiteBefore.SecondBestEvalText})";
+                }
+
+                double deltaPawns = evalAfterAnalysis.EvalWhitePawns - bestWhiteBefore.EvalWhitePawns;
+                string sign = deltaPawns >= 0 ? "+" : "";
+                evalComparisonText = $"Antes: {bestWhiteBefore.EvalText} -> Depois: {evalAfterAnalysis.EvalText} (Δ {sign}{deltaPawns:0.00})";
 
                 coachNote = EngineService.ExplainMoveCoach(
                     rulesBefore,
@@ -173,7 +193,41 @@ namespace XadrezApp
                 playedBest,
                 classification,
                 coachNote,
-                bestAlternativeStr);
+                bestAlternativeStr,
+                secondAlternativeStr,
+                evalComparisonText);
+        }
+
+        // Formata o painel explicativo do Modo Professor após um lance ou pedido de dica
+        public static string BuildTeacherComparisonBox(
+            ChessRules rulesBefore,
+            Point playedFrom,
+            Point playedTo,
+            string playedSan,
+            TurnEvaluationSummary summary,
+            bool english = false)
+        {
+            var sb = new StringBuilder();
+            if (english)
+            {
+                sb.AppendLine($"[🎓 TEACHER MODE — Move {playedSan}]");
+                sb.AppendLine($"  • Evaluation Before vs After: {summary.EvalComparisonText}");
+                sb.AppendLine($"  • Best Move (#1): {summary.BestAlternativeStr} | Alternative (#2): {summary.SecondAlternativeStr}");
+                sb.AppendLine($"  • Coach Explanation: {summary.CoachNote}");
+            }
+            else
+            {
+                sb.AppendLine($"[🎓 MODO PROFESSOR — Lance {playedSan}]");
+                sb.AppendLine($"  • Comparação Antes/Depois: {summary.EvalComparisonText}");
+                sb.AppendLine($"  • Melhor Lance (1º): {summary.BestAlternativeStr} | Lance Alternativo (2º): {summary.SecondAlternativeStr}");
+                sb.AppendLine($"  • Por quê: {summary.CoachNote}");
+            }
+
+            var tactics = EngineService.DetectTacticalPatterns(rulesBefore, playedFrom, playedTo, null, english);
+            if (tactics.Count > 0)
+                sb.AppendLine($"  • Padrões Táticos Identificados: {string.Join(", ", tactics)}");
+
+            return sb.ToString().TrimEnd();
         }
 
         public Task<EngineAnalysisResult> AnalyzePositionOrHintAsync(ChessRules analysisRules, bool sideToMove)
@@ -209,6 +263,7 @@ namespace XadrezApp
                 sb.AppendLine("=== AI GAME ANALYSIS REPORT ===");
                 sb.AppendLine($"White Average Accuracy: {avgAcc:0.1}% ({MoveEvaluations.Count} moves analyzed)");
                 sb.AppendLine($"Opening played: {StudyLibrary.DetectOpening(sanMoves)}");
+                sb.AppendLine($"Suggested Lesson: {StudyLibrary.GetOpeningLesson(sanMoves, true)}");
                 sb.AppendLine();
                 sb.AppendLine($"• Brilliant (!!): {brilliant}   |   Best Moves (!): {best}   |   Book (📖): {book}");
                 sb.AppendLine($"• Good Moves: {good}        |   Inaccuracies (?!): {inaccuracies}");
@@ -226,6 +281,7 @@ namespace XadrezApp
                 sb.AppendLine($"=== RELATÓRIO DE ANÁLISE DA PARTIDA (IA) ===");
                 sb.AppendLine($"Precisão Média das Brancas: {avgAcc:0.1}% ({MoveEvaluations.Count} lances analisados)");
                 sb.AppendLine($"Abertura jogada: {StudyLibrary.DetectOpening(sanMoves)}");
+                sb.AppendLine($"Lição Recomendada: {StudyLibrary.GetOpeningLesson(sanMoves, false)}");
                 sb.AppendLine();
                 sb.AppendLine($"• Brilhantes (!!): {brilliant}   |   Melhores Lances (!): {best}   |   Teóricos (📖): {book}");
                 sb.AppendLine($"• Lances Bons: {good}        |   Imprecisões (?!): {inaccuracies}");

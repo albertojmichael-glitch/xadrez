@@ -17,7 +17,6 @@ namespace XadrezApp
         private readonly ChessRules rules;
         private readonly Dictionary<string, Image> pieceImages = new Dictionary<string, Image>();
 
-        // Zoom e geometria responsiva (no tamanho padrão 544x544 com Zoom 1.0, usa exatamente 62px e offset 24px)
         public float ZoomFactor { get; private set; } = 1.0f;
         private int currentSquareSize = SquareSize;
         private int boardOriginX = BoardOffset;
@@ -34,21 +33,21 @@ namespace XadrezApp
         public (Point from, Point to)? QueuedPremove { get; set; } = null;
         public HashSet<Point> MarkedSquares { get; } = new HashSet<Point>();
         public List<(Point from, Point to)> DrawnArrows { get; } = new List<(Point from, Point to)>();
-        public (Point from, Point to)? HintArrow { get; set; } = null;
 
-        // Destaques de último lance, promoção e lance inválido
+        // Seta 1º Melhor Lance (Verde) e 2º Lance Alternativo do Modo Professor (Azul/Ciano)
+        public (Point from, Point to)? HintArrow { get; set; } = null;
+        public (Point from, Point to)? AlternativeHintArrow { get; set; } = null;
+
         public (Point from, Point to)? LastMove { get; set; } = null;
         public Point? LastPromotionSquare { get; set; } = null;
         private Point? invalidFlashSquare = null;
         private readonly System.Windows.Forms.Timer invalidFlashTimer;
 
-        // Acessibilidade: navegação por teclado e foco visível
-        public Point KeyboardCursor { get; private set; } = new Point(4, 6); // Casa e2
+        public Point KeyboardCursor { get; private set; } = new Point(4, 6);
         public bool ShowKeyboardFocus { get; private set; } = false;
 
         private Point? rightDragStart = null;
 
-        // Eventos para o MainForm
         public event Action<Point>? SquareLeftClicked;
         public event Action<string>? ScreenReaderAnnouncement;
 
@@ -108,6 +107,7 @@ namespace XadrezApp
             MarkedSquares.Clear();
             DrawnArrows.Clear();
             HintArrow = null;
+            AlternativeHintArrow = null;
             LastMove = null;
             LastPromotionSquare = null;
             invalidFlashSquare = null;
@@ -121,6 +121,7 @@ namespace XadrezApp
             PremoveSelection = null;
             QueuedPremove = null;
             HintArrow = null;
+            AlternativeHintArrow = null;
         }
 
         public void ClearSelectionAndHint()
@@ -128,6 +129,7 @@ namespace XadrezApp
             SelectedSquare = null;
             LegalMoves.Clear();
             HintArrow = null;
+            AlternativeHintArrow = null;
         }
 
         protected override void OnResize(EventArgs eventargs)
@@ -191,7 +193,6 @@ namespace XadrezApp
             }
         }
 
-        // Mantém o método estático para compatibilidade com a geometria padrão
         public static Point? ScreenToSquare(int x, int y) =>
             ScreenToSquare(x, y, BoardOffset, BoardOffset, SquareSize);
 
@@ -207,7 +208,6 @@ namespace XadrezApp
         public Point? HitTestSquare(int x, int y) =>
             ScreenToSquare(x, y, boardOriginX, boardOriginY, currentSquareSize);
 
-        // Suporte a Acessibilidade por Teclado e Screen Reader
         protected override bool IsInputKey(Keys keyData)
         {
             Keys keyCode = keyData & Keys.KeyCode;
@@ -507,7 +507,6 @@ namespace XadrezApp
 
                     Color sqColor = isLight ? lightColor : darkColor;
 
-                    // Destaque suave do último lance realizado
                     if (LastMove.HasValue && (LastMove.Value.from == pt || LastMove.Value.to == pt))
                     {
                         sqColor = isLight
@@ -521,7 +520,6 @@ namespace XadrezApp
                     using (var brush = new SolidBrush(sqColor))
                         g.FillRectangle(brush, x, y, sqSize, sqSize);
 
-                    // Feedback de Promoção de Peão (moldura dourada + estrela)
                     if (LastPromotionSquare == pt)
                     {
                         using var promoBrush = new SolidBrush(Color.FromArgb(110, 255, 215, 0));
@@ -530,7 +528,6 @@ namespace XadrezApp
                         g.DrawRectangle(promoPen, x + 1, y + 1, sqSize - 2, sqSize - 2);
                     }
 
-                    // Feedback Visual Claro de Xeque e Xeque-Mate no Rei
                     char piece = rules.Board[r, c];
                     if ((piece == 'K' && whiteInCheck) || (piece == 'k' && blackInCheck))
                     {
@@ -546,7 +543,6 @@ namespace XadrezApp
                         g.DrawRectangle(checkPen, x + 1, y + 1, sqSize - 2, sqSize - 2);
                     }
 
-                    // Feedback de Lance Inválido (pisca em vermelho com '✖')
                     if (invalidFlashSquare == pt)
                     {
                         using var invBrush = new SolidBrush(Color.FromArgb(190, 225, 30, 30));
@@ -575,7 +571,6 @@ namespace XadrezApp
                         g.DrawRectangle(orangePen, x + 2, y + 2, sqSize - 4, sqSize - 4);
                     }
 
-                    // Renderização das Peças (Normal ou Recolorida em Alto Contraste)
                     if (piece != '.')
                     {
                         int variant = rules.PieceVariants[r, c];
@@ -593,7 +588,6 @@ namespace XadrezApp
                         }
                     }
 
-                    // Selos visuais de Xeque, Mate, Promoção e Lance Inválido no topo da casa
                     if ((piece == 'K' && whiteInCheck) || (piece == 'k' && blackInCheck))
                     {
                         bool isMate = currentSideHasNoMoves && ((piece == 'K' && rules.WhiteTurn) || (piece == 'k' && !rules.WhiteTurn));
@@ -610,7 +604,6 @@ namespace XadrezApp
                         DrawCornerBadge(g, "✖", x + sqSize - 20, y + 2, Color.FromArgb(190, 0, 0), Color.White);
                     }
 
-                    // Foco Visível para Navegação por Teclado (Acessibilidade)
                     if ((Focused || ShowKeyboardFocus) && KeyboardCursor == pt)
                     {
                         using var outerPen = new Pen(Color.Black, 3.5f);
@@ -622,10 +615,21 @@ namespace XadrezApp
             }
 
             foreach (var arrow in DrawnArrows)
-                DrawBoardArrow(g, arrow.from, arrow.to, Color.FromArgb(200, 55, 70, 75), ox, oy, sqSize);
+                DrawBoardArrow(g, arrow.from, arrow.to, Color.FromArgb(200, 55, 70, 75), ox, oy, sqSize, null);
 
+            // Seta 2º Lance Alternativo (Modo Professor - Azul/Ciano)
+            if (AlternativeHintArrow.HasValue)
+            {
+                DrawBoardArrow(g, AlternativeHintArrow.Value.from, AlternativeHintArrow.Value.to,
+                    Color.FromArgb(210, 30, 125, 220), ox, oy, sqSize, "2º");
+            }
+
+            // Seta 1º Melhor Lance (Verde)
             if (HintArrow.HasValue)
-                DrawBoardArrow(g, HintArrow.Value.from, HintArrow.Value.to, Color.FromArgb(215, 30, 160, 50), ox, oy, sqSize);
+            {
+                DrawBoardArrow(g, HintArrow.Value.from, HintArrow.Value.to,
+                    Color.FromArgb(220, 30, 160, 50), ox, oy, sqSize, AlternativeHintArrow.HasValue ? "1º" : null);
+            }
         }
 
         private void DrawPieceSprite(Graphics g, Image img, char piece, int x, int y, int sqSize)
@@ -639,7 +643,6 @@ namespace XadrezApp
                 return;
             }
 
-            // Modo Alto Contraste: desenha medalhão de contraste atrás da peça e aplica ColorMatrix de alto contraste no sprite PNG
             bool isWhite = char.IsUpper(piece);
             Color badgeFill = isWhite ? Color.FromArgb(235, 255, 255, 255) : Color.FromArgb(235, 18, 18, 22);
             Color badgeBorder = isWhite ? Color.Black : Color.FromArgb(255, 215, 0);
@@ -701,7 +704,7 @@ namespace XadrezApp
             g.DrawString(symbol, f, bMain, x + 4, y + 2);
         }
 
-        private static void DrawBoardArrow(Graphics g, Point from, Point to, Color color, int ox, int oy, int sqSize)
+        private static void DrawBoardArrow(Graphics g, Point from, Point to, Color color, int ox, int oy, int sqSize, string? rankTag)
         {
             PointF p1 = new PointF(ox + from.X * sqSize + sqSize / 2f, oy + from.Y * sqSize + sqSize / 2f);
             PointF p2 = new PointF(ox + to.X * sqSize + sqSize / 2f, oy + to.Y * sqSize + sqSize / 2f);
@@ -711,6 +714,11 @@ namespace XadrezApp
             pen.StartCap = LineCap.Round;
             pen.CustomEndCap = arrowCap;
             g.DrawLine(pen, p1, p2);
+
+            if (!string.IsNullOrEmpty(rankTag))
+            {
+                DrawCornerBadge(g, rankTag, (int)p2.X - 10, (int)p2.Y - 10, Color.FromArgb(230, 20, 20, 25), Color.White);
+            }
         }
 
         protected override void Dispose(bool disposing)

@@ -11,6 +11,18 @@ namespace XadrezApp
         public string Hint { get; set; } = "";
     }
 
+    public class InteractiveTutorial
+    {
+        public string Title { get; set; } = "";
+        public string Category { get; set; } = "";
+        public string Fen { get; set; } = "";
+        public string PracticeMoveUci { get; set; } = "";
+        public string LessonTextPt { get; set; } = "";
+        public string LessonTextEn { get; set; } = "";
+        public string StepInstructionPt { get; set; } = "";
+        public string StepInstructionEn { get; set; } = "";
+    }
+
     public static class StudyLibrary
     {
         // Livro de Aberturas ordenado da linha mais específica (maior número de lances) para a mais geral
@@ -424,6 +436,145 @@ namespace XadrezApp
                 Fen = "6k1/1b3ppp/8/8/8/5q2/5P1P/6K1 b - - 0 1",
                 SolutionUci = "f3g2",
                 Hint = "Você está de Pretas! O Bispo em b7 apoia a Dama na grande diagonal. Jogue Dg2# para dar xeque-mate!"
+            }
+        };
+
+        // Sugere lições estratégicas personalizadas com base na abertura detectada por DetectOpening
+        public static string GetOpeningLesson(IReadOnlyList<string> sanMoves, bool english = false)
+        {
+            var list = new List<string>(sanMoves);
+            string detected = DetectOpening(list);
+
+            if (detected.Contains("Ruy Lopez"))
+            {
+                return english
+                    ? "Ruy Lopez Lesson: Pressure e5 indirectly via Nc6, castle kingside quickly (O-O), prepare c3 + d4 to dominate the center, and maneuver the b1-knight via d2-f1-g3."
+                    : "Lição (Ruy Lopez): Pressione indiretamente o peão de e5 atacando c6, faça o roque pequeno (O-O) rápido, prepare o plano c3 + d4 para dominar o centro e manobre o Cavalo via Nbd2-f1-g3.";
+            }
+            if (detected.Contains("Italiana") || detected.Contains("Dois Cavalos") || detected.Contains("Quatro Cavalos") || detected.Contains("Escocesa") || detected.Contains("Gambito do Rei"))
+            {
+                return english
+                    ? "Open Games Lesson: Aim your active pieces at f7 and the center (d4/e4), castle early, and place rooks on the central files e1 and d1."
+                    : "Lição (Jogos Abertos / Italiana / Escocesa): Mire o ponto fraco f7 e o centro (d4/e4), faça o roque cedo e centralize as Torres nas colunas abertas 'd' e 'e'.";
+            }
+            if (detected.Contains("Siciliana"))
+            {
+                return english
+                    ? "Sicilian Defense Lesson: Asymmetrical fight! White attacks on the kingside and central d4 square; Black counterattacks along the half-open c-file and fights for d5."
+                    : "Lição (Defesa Siciliana): Luta assimétrica! As Brancas buscam abrir o centro com d4 e atacar na ala do Rei; as Pretas contra-atacam pela coluna 'c' semiaberta e lutam pela casa d5.";
+            }
+            if (detected.Contains("Francesa") || detected.Contains("Caro-Kann") || detected.Contains("Escandinava") || detected.Contains("Pirc") || detected.Contains("Alekhine"))
+            {
+                return english
+                    ? "Semi-Open Defense Lesson: Watch the central pawn tension! White uses space advantage on the kingside; Black challenges the pawn chain at d4/e5 with ...c5 or ...f6."
+                    : "Lição (Defesas Semiabertas): Atenção à cadeia de peões! As Brancas aproveitam a vantagem de espaço; as Pretas devem golpear a base da cadeia em d4 com ...c5.";
+            }
+            if (detected.Contains("Londres") || detected.Contains("Colle") || detected.Contains("Torre") || detected.Contains("Trompowsky"))
+            {
+                return english
+                    ? "d4 System Lesson: Build the solid pyramid c3-d4-e3 after developing the dark-squared bishop outside the pawn chain. Control the e5 outpost."
+                    : "Lição (Sistemas de d4 / Londres): Desenvolva o Bispo de casas escuras para fora da cadeia ANTES de jogar e3, monte a pirâmide sólida c3-d4-e3 e domine a casa e5.";
+            }
+            if (detected.Contains("Gambito da Dama") || detected.Contains("Eslava") || detected.Contains("Catalã") || detected.Contains("Índia") || detected.Contains("Grünfeld") || detected.Contains("Benoni") || detected.Contains("Holandesa"))
+            {
+                return english
+                    ? "Queen's Pawn / Indian Defense Lesson: Fight for the key central squares e4 and d5. Develop knights and fianchetto bishops harmoniously before committing to central pawn breaks."
+                    : "Lição (Gambito da Dama / Defesas Índias): Lute pelo controle de e4 e d5. Desenvolva os Cavalos e os Bispos em fianchetto antes de definir as rupturas centrais.";
+            }
+            if (detected.Contains("Inglesa") || detected.Contains("Réti") || detected.Contains("Bird") || detected.Contains("Larsen"))
+            {
+                return english
+                    ? "Flank Opening Lesson: Control the center from a distance using flank pawns (c4/f4) and fianchettoed bishops on g2 or b2."
+                    : "Lição (Aberturas de Flanco / Inglesa / Réti): Controle o centro à distância combinando peões de flanco (c4) com Bispos fianchetados nas grandes diagonais.";
+            }
+
+            return english
+                ? "Classical Opening Principles: 1) Control the center (e4/d4), 2) Develop Knights before Bishops, 3) Castle early for King safety, 4) Connect your Rooks."
+                : "Princípios Clássicos da Abertura: 1) Domine o centro (e4/d4), 2) Desenvolva Cavalos e Bispos, 3) Faça o Roque cedo para proteger o Rei, 4) Conecte as Torres.";
+        }
+
+        // 4 Mini-Tutoriais Interativos (Roque, En Passant, Finais Básicos e Abertura Clássica)
+        public static readonly List<InteractiveTutorial> MiniTutorials = new()
+        {
+            new InteractiveTutorial
+            {
+                Title = "Tutorial 1: Regras do Roque (O-O e O-O-O)",
+                Category = "Regras Especiais",
+                Fen = "r3k2r/ppp2ppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPP2PPP/R3K2R w KQkq - 2 6",
+                PracticeMoveUci = "e1g1",
+                LessonTextPt =
+                    "📚 MINI-TUTORIAL: COMO FUNCIONA O ROQUE\r\n" +
+                    "1. O Roque é o único lance em que duas peças se movem juntas: o Rei anda 2 casas em direção à Torre, e a Torre salta por cima dele.\r\n" +
+                    "2. Condições obrigatórias:\r\n" +
+                    "   • Nem o Rei nem a Torre escolhida podem ter se movido antes na partida.\r\n" +
+                    "   • Não pode haver nenhuma peça entre o Rei e a Torre.\r\n" +
+                    "   • O Rei NÃO pode estar em xeque no momento do roque.\r\n" +
+                    "   • O Rei NÃO pode passar por uma casa atacada nem terminar em xeque.\r\n" +
+                    "👉 PRÁTICA: Clique no Rei branco em e1 e mova-o para g1 (Roque Pequeno O-O) ou para c1 (Roque Grande O-O-O)!",
+                LessonTextEn =
+                    "📚 MINI-TUTORIAL: CASTLING RULES (O-O & O-O-O)\r\n" +
+                    "1. Castling moves the King 2 squares toward the Rook, and the Rook jumps over the King.\r\n" +
+                    "2. Requirements: King and Rook must never have moved, path must be clear, King cannot be in check or cross an attacked square.\r\n" +
+                    "👉 PRACTICE: Move the White King from e1 to g1 (O-O) or c1 (O-O-O)!",
+                StepInstructionPt = "Prática de Roque: Mova o Rei de e1 para g1 (Roque Pequeno) ou c1 (Roque Grande)!",
+                StepInstructionEn = "Castling Practice: Move the King from e1 to g1 (Kingside) or c1 (Queenside)!"
+            },
+            new InteractiveTutorial
+            {
+                Title = "Tutorial 2: Captura En Passant (Na Passagem)",
+                Category = "Regras Especiais",
+                Fen = "rnbqkbnr/ppp1pppp/8/3pP3/8/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 3",
+                PracticeMoveUci = "e5d6",
+                LessonTextPt =
+                    "📚 MINI-TUTORIAL: CAPTURA EN PASSANT\r\n" +
+                    "1. Quando um peão está na 5ª fileira (como o peão branco em e5) e o peão inimigo avança 2 casas de uma vez ficando ao lado dele (d7 -> d5), você pode capturá-lo 'na passagem'!\r\n" +
+                    "2. Regra de Ouro: O En Passant SÓ pode ser feito imediatamente no lance seguinte ao avanço duplo do peão adversário.\r\n" +
+                    "3. Seu peão move-se na diagonal para a casa vazia por onde o peão inimigo passou (d6), removendo o peão de d5.\r\n" +
+                    "👉 PRÁTICA: Selecione o seu peão em e5 e capture na diagonal em d6 (exd6)!",
+                LessonTextEn =
+                    "📚 MINI-TUTORIAL: EN PASSANT CAPTURE\r\n" +
+                    "1. When your pawn on the 5th rank (e5) sees an enemy pawn advance 2 squares beside it (d7 -> d5), you can capture it 'in passing' on d6!\r\n" +
+                    "2. It must be played immediately on the very next turn.\r\n" +
+                    "👉 PRACTICE: Select the White pawn on e5 and move it diagonally to d6 (exd6)!",
+                StepInstructionPt = "Prática de En Passant: Clique no peão branco em e5 e capture na casa d6!",
+                StepInstructionEn = "En Passant Practice: Click the White pawn on e5 and capture on d6!"
+            },
+            new InteractiveTutorial
+            {
+                Title = "Tutorial 3: Finais Básicos (Oposição e Peão Passado)",
+                Category = "Finais Essenciais",
+                Fen = "4k3/8/4K3/4P3/8/8/8/8 w - - 0 1",
+                PracticeMoveUci = "e6d6",
+                LessonTextPt =
+                    "📚 MINI-TUTORIAL: FINAIS DE REI E PEÃO (OPOSIÇÃO E CASAS CRÍTICAS)\r\n" +
+                    "1. No final de partida, o Rei deixa de ser uma peça frágil e torna-se uma peça ativa que deve ir à frente do próprio peão!\r\n" +
+                    "2. Nunca empurre o peão para e6 dando afogamento ou perdendo a oposição: use o seu Rei em d6 ou f6 para controlar a casa de coroação e8.\r\n" +
+                    "👉 PRÁTICA: Jogue o Rei de e6 para d6 (ou f6) para garantir a promoção do peão em e8!",
+                LessonTextEn =
+                    "📚 MINI-TUTORIAL: BASIC ENDGAMES (KING & PAWN)\r\n" +
+                    "1. In the endgame, lead with your King in front of the passed pawn!\r\n" +
+                    "2. Do not push e5-e6 too early; step the King to d6 or f6 to control the promotion square e8.\r\n" +
+                    "👉 PRACTICE: Move the White King from e6 to d6 (or f6)!",
+                StepInstructionPt = "Prática de Final: Mova o Rei branco de e6 para d6 (ou f6) para escoltar o peão até e8!",
+                StepInstructionEn = "Endgame Practice: Move the White King from e6 to d6 (or f6) to escort the pawn!"
+            },
+            new InteractiveTutorial
+            {
+                Title = "Tutorial 4: Abertura Clássica (Centro e Desenvolvimento)",
+                Category = "Aberturas Clássicas",
+                Fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
+                PracticeMoveUci = "f1c4",
+                LessonTextPt =
+                    "📚 MINI-TUTORIAL: PRINCÍPIOS DA ABERTURA CLÁSSICA\r\n" +
+                    "1. Domínio do Centro: Os peões em e4 e e5 controlam casas vitais.\r\n" +
+                    "2. Desenvolvimento Rápido: Após desenvolver o Cavalo para f3 atacando e5, é hora de colocar o Bispo em uma diagonal ativa mirando f7 e preparando o Roque Pequeno (O-O).\r\n" +
+                    "👉 PRÁTICA: Desenvolva o Bispo de f1 para c4 (Abertura Italiana) ou para b5 (Ruy Lopez)!",
+                LessonTextEn =
+                    "📚 MINI-TUTORIAL: CLASSICAL OPENING PRINCIPLES\r\n" +
+                    "1. Control the center, develop Knights and Bishops toward active squares, and prepare early castling.\r\n" +
+                    "👉 PRACTICE: Develop the White Bishop from f1 to c4 (Italian Game) or b5 (Ruy Lopez)!",
+                StepInstructionPt = "Prática de Abertura: Desenvolva o Bispo de f1 para c4 (Italiana) ou b5 (Espanhola)!",
+                StepInstructionEn = "Opening Practice: Develop the Bishop from f1 to c4 (Italian) or b5 (Ruy Lopez)!"
             }
         };
     }

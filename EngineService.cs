@@ -14,14 +14,16 @@ namespace XadrezApp
     {
         public (Point from, Point to)? BestMove { get; set; }
         public char? Promotion { get; set; }
+        public (Point from, Point to)? SecondBestMove { get; set; }
+        public char? SecondBestPromotion { get; set; }
+        public string SecondBestEvalText { get; set; } = "";
         public double EvalWhitePawns { get; set; }
         public string EvalText { get; set; } = "+0.00";
-        public int? MateInMoves { get; set; }
         public long Nodes { get; set; }
         public string LogLine { get; set; } = "";
         public string PrincipalVariation { get; set; } = "";
         public List<string> TopMovesSummary { get; set; } = new List<string>();
-        public bool WasCancelled { get; set; }
+        public List<string> VariationTreeLines { get; set; } = new List<string>();
     }
 
     public class EngineService : IDisposable
@@ -29,21 +31,16 @@ namespace XadrezApp
         private Process? stockfishProcess;
         private bool disposed = false;
 
-        // Random.Shared é thread-safe (o Random comum não é, e a engine roda em Task.Run)
         private static Random rng => Random.Shared;
 
-        // Garante que só UMA consulta conversa com o processo do Stockfish por vez
         private readonly SemaphoreSlim stockfishLock = new SemaphoreSlim(1, 1);
-
-        // Protege as escritas no stdin e o CancellationTokenSource ativo
         private readonly object stdinLock = new object();
-        private CancellationTokenSource? activeSearchCts;
 
         public bool IsUsingStockfish => stockfishProcess != null && !stockfishProcess.HasExited;
 
         private readonly record struct SearchMove(Point From, Point To, char? Promotion = null);
 
-        // Tabelas Posicionais (Piece-Square Tables) para ensinar estratégia, domínio do centro e segurança do Rei
+        // Tabelas Posicionais de Meio-Jogo
         private static readonly int[,] PawnTable = {
             {  0,  0,  0,  0,  0,  0,  0,  0 },
             { 50, 50, 50, 50, 50, 50, 50, 50 },
@@ -88,7 +85,8 @@ namespace XadrezApp
             { -5,  0,  5, 10, 10,  5,  0, -5 }
         };
 
-        private static readonly int[,] KingTable = {
+        // Rei no Meio-Jogo: incentiva o Roque e esconde o Rei atrás dos peões
+        private static readonly int[,] KingMiddlegameTable = {
             {-30,-40,-40,-50,-50,-40,-40,-30 },
             {-30,-40,-40,-50,-50,-40,-40,-30 },
             {-30,-40,-40,-50,-50,-40,-40,-30 },
@@ -97,6 +95,18 @@ namespace XadrezApp
             {-10,-20,-20,-20,-20,-20,-20,-10 },
             { 20, 20,  0,  0,  0,  0, 20, 20 },
             { 20, 35, 25, -5,  0, -5, 35, 20 }
+        };
+
+        // Rei no Final de Jogo: centraliza fortemente o Rei para apoiar peões passados e lutar por oposição!
+        private static readonly int[,] KingEndgameTable = {
+            {-50,-35,-25,-15,-15,-25,-35,-50 },
+            {-35,-15,  0, 10, 10,  0,-15,-35 },
+            {-25,  0, 25, 35, 35, 25,  0,-25 },
+            {-15, 10, 35, 45, 45, 35, 10,-15 },
+            {-15, 10, 35, 45, 45, 35, 10,-15 },
+            {-25,  0, 25, 35, 35, 25,  0,-25 },
+            {-35,-15,  0, 10, 10,  0,-15,-35 },
+            {-50,-35,-25,-15,-15,-25,-35,-50 }
         };
 
         public EngineService()
@@ -208,7 +218,6 @@ namespace XadrezApp
         {
             if (disposed) return;
             disposed = true;
-            StopSearch();
             ShutdownStockfishProcess();
             GC.SuppressFinalize(this);
         }
@@ -218,118 +227,30 @@ namespace XadrezApp
             try
             {
                 lock (stdinLock)
-                {
-                    activeSearchCts?.Cancel();
                     stockfishProcess?.StandardInput.WriteLine("stop");
-                    stockfishProcess?.StandardInput.Flush();
-                }
             }
             catch { }
         }
 
-        // Verifica se um lance entregou material de propósito (sacrifício real, não simples captura ou posição já ganha >= +3)
-        public static bool IsMaterialSacrifice(
-            ChessRules rulesBefore,
-            Point from,
-            Point to,
-            char? promo,
-            double evalBeforeWhite,
-            double evalAfterWhite)
-        {
-            bool forWhite = rulesBefore.WhiteTurn;
-            double evalBeforeMover = forWhite ? evalBeforeWhite : -evalBeforeWhite;
-            double evalAfterMover = forWhite ? evalAfterWhite : -evalAfterWhite;
-
-            // Posição não pode já estar ganha (+3.0 ou mais) e não pode ficar perdida após o lance
-            if (evalBeforeMover >= 3.0 || evalAfterMover < -0.25)
-                return false;
-
-            // Promoção não é sacrifício de material
-            if (promo.HasValue)
-                return false;
-
-            char movedPiece = rulesBefore.Board[from.Y, from.X];
-            if (movedPiece == '.' || char.ToUpper(movedPiece) == 'K')
-                return false;
-
-            char capturedPiece = rulesBefore.Board[to.Y, to.X];
-            int movedVal = PieceBaseValue(movedPiece);
-            int capturedVal = PieceBaseValue(capturedPiece);
-
-            // Se já capturou peça de valor igual ou maior, é troca ou ganho material, não sacrifício
-            if (capturedVal >= movedVal)
-                return false;
-
-            var after = rulesBefore.Clone();
-            after.ExecuteMove(from, to, promo);
-
-            // Verifica se a peça movida foi colocada numa casa atacada pelo oponente
-            int cheapestEnemyAttacker = GetCheapestAttackerValue(after, to, !forWhite);
-            if (cheapestEnemyAttacker > 0)
-            {
-                bool isDefended = GetCheapestAttackerValue(after, to, forWhite) > 0;
-                // Se entregou a peça sem defesa (ganhando menos do que entregou) ou para um atacante mais barato
-                if (!isDefended && (movedVal - capturedVal) >= 200)
-                    return true;
-                if (cheapestEnemyAttacker + capturedVal <= movedVal - 150)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static int GetCheapestAttackerValue(ChessRules state, Point target, bool byWhite)
-        {
-            int cheapest = int.MaxValue;
-            for (int r = 0; r < 8; r++)
-            {
-                for (int c = 0; c < 8; c++)
-                {
-                    char p = state.Board[r, c];
-                    if (p == '.' || char.IsUpper(p) != byWhite) continue;
-                    var attacks = state.GetPseudoMoves(state.Board, c, r, byWhite, false);
-                    if (attacks.Contains(target))
-                    {
-                        int val = PieceBaseValue(p);
-                        if (val < cheapest) cheapest = val;
-                    }
-                }
-            }
-            return cheapest == int.MaxValue ? 0 : cheapest;
-        }
-
-        // Classificação precisa comparando o lance do jogador com o melhor lance da Engine (suporta Brancas ou Pretas)
         public static (string badge, string description, Color color) ClassifyMove(
             double evalBeforeWhite,
             double evalAfterWhite,
             bool playedEngineBestMove,
             bool isBookMove = false,
-            bool isSacrificeOrTactical = false,
-            bool forWhite = true,
-            int? mateInMoves = null,
-            bool isImmediateCheckmate = true)
+            bool isSacrificeOrTactical = false)
         {
-            double evalBeforeMover = forWhite ? evalBeforeWhite : -evalBeforeWhite;
-            double evalAfterMover = forWhite ? evalAfterWhite : -evalAfterWhite;
-
-            if (evalAfterMover >= 90.0)
-            {
-                if (!isImmediateCheckmate && mateInMoves.HasValue && Math.Abs(mateInMoves.Value) > 0)
-                    return ("!", $"Mate em {Math.Abs(mateInMoves.Value)}", Color.FromArgb(20, 150, 80));
+            if (evalAfterWhite >= 90.0)
                 return ("!", "Xeque-Mate!", Color.FromArgb(20, 150, 80));
-            }
 
-            if (isBookMove && evalAfterMover - evalBeforeMover >= -0.25)
+            if (isBookMove && evalAfterWhite - evalBeforeWhite >= -0.25)
                 return ("📖", "Teórico (Livro)", Color.FromArgb(115, 75, 35));
 
-            // Usa a mudança em probabilidade de vitória (Win%) + perda em peões sob a ótica de quem jogou
-            double delta = evalAfterMover - evalBeforeMover;
-            double winBefore = EvalToWinProbability(evalBeforeMover);
-            double winAfter = EvalToWinProbability(evalAfterMover);
+            double delta = evalAfterWhite - evalBeforeWhite;
+            double winBefore = EvalToWinProbability(evalBeforeWhite);
+            double winAfter = EvalToWinProbability(evalAfterWhite);
             double winDrop = Math.Max(0.0, winBefore - winAfter);
 
-            // Brilhante exige sacrifício real em posição ainda não decisiva (< +3.0) sendo o melhor lance
-            if (playedEngineBestMove && isSacrificeOrTactical && evalBeforeMover < 3.0 && evalAfterMover >= -0.25)
+            if (playedEngineBestMove && (isSacrificeOrTactical || (delta >= 0.35 && evalAfterWhite >= 1.20)))
                 return ("!!", "Brilhante!", Color.FromArgb(15, 150, 165));
             if (playedEngineBestMove || (delta >= -0.15 && winDrop <= 0.025))
                 return ("!", "Melhor Lance", Color.FromArgb(25, 140, 35));
@@ -343,37 +264,119 @@ namespace XadrezApp
             return ("??", "Capivarada (Blunder)", Color.FromArgb(195, 20, 20));
         }
 
-        // Converte avaliação em peões para probabilidade estimada de vitória (0.0 a 1.0)
         public static double EvalToWinProbability(double evalPawns)
         {
             double clamped = Math.Clamp(evalPawns, -15.0, 15.0);
             return 1.0 / (1.0 + Math.Exp(-0.40 * clamped));
         }
 
-        // Calcula a precisão (0% a 100%) de um único lance (das Brancas ou das Pretas)
-        public static double ComputeMoveAccuracy(
-            double evalBeforeWhite,
-            double evalAfterWhite,
-            bool playedBest,
-            bool isBookMove = false,
-            bool forWhite = true)
+        public static double ComputeMoveAccuracy(double evalBeforeWhite, double evalAfterWhite, bool playedBest, bool isBookMove = false)
         {
-            double evalBeforeMover = forWhite ? evalBeforeWhite : -evalBeforeWhite;
-            double evalAfterMover = forWhite ? evalAfterWhite : -evalAfterWhite;
-
-            if (playedBest || isBookMove || evalAfterMover >= evalBeforeMover)
+            if (playedBest || isBookMove || evalAfterWhite >= evalBeforeWhite)
                 return 100.0;
 
-            double winBefore = EvalToWinProbability(evalBeforeMover) * 100.0;
-            double winAfter = EvalToWinProbability(evalAfterMover) * 100.0;
+            double winBefore = EvalToWinProbability(evalBeforeWhite) * 100.0;
+            double winAfter = EvalToWinProbability(evalAfterWhite) * 100.0;
             double winDiff = Math.Max(0.0, winBefore - winAfter);
 
-            // Fórmula inspirada no Lichess/Chess.com: 103.1668 * exp(-0.04354 * winDiff) - 3.1669
             double acc = 103.1668 * Math.Exp(-0.04354 * winDiff) - 3.1669;
             return Math.Clamp(acc, 0.0, 100.0);
         }
 
-        // Gera uma explicação em português sobre o motivo tático/posicional da avaliação do lance
+        // Detector de Padrões Táticos: Garfo (Fork), Cravada (Pin), Espeto (Skewer) e Ataque Descoberto (Discovered Attack)
+        public static List<string> DetectTacticalPatterns(ChessRules rulesBefore, Point from, Point to, char? promo = null, bool english = false)
+        {
+            var patterns = new List<string>();
+            char movedPiece = rulesBefore.Board[from.Y, from.X];
+            if (movedPiece == '.') return patterns;
+
+            bool isWhite = char.IsUpper(movedPiece);
+            var afterRules = rulesBefore.Clone();
+            afterRules.ExecuteMove(from, to, promo);
+
+            char pieceAtDest = afterRules.Board[to.Y, to.X];
+
+            // 1. Garfo / Ataque Duplo (Fork): a peça movida ataca 2 ou mais peças inimigas valiosas (ou Rei + peça)
+            var pseudoTargets = afterRules.GetPseudoMoves(afterRules.Board, to.X, to.Y, isWhite, false);
+            var valuableAttacked = new List<char>();
+            foreach (var sq in pseudoTargets)
+            {
+                char enemy = afterRules.Board[sq.Y, sq.X];
+                if (enemy != '.' && char.IsUpper(enemy) != isWhite)
+                {
+                    int enemyVal = PieceBaseValue(enemy);
+                    if (enemyVal >= 320 || enemyVal > PieceBaseValue(pieceAtDest))
+                        valuableAttacked.Add(enemy);
+                }
+            }
+            if (valuableAttacked.Count >= 2)
+            {
+                patterns.Add(english ? "Fork (Double Attack)" : "Garfo (Ataque Duplo)");
+            }
+
+            // 2. Cravada (Pin) e Espeto (Skewer) por peças deslizantes (Bispo, Torre, Dama)
+            char lowerDest = char.ToLower(pieceAtDest);
+            if (lowerDest is 'b' or 'r' or 'q')
+            {
+                var dirs = new List<(int dx, int dy)>();
+                if (lowerDest is 'r' or 'q') dirs.AddRange(new[] { (1, 0), (-1, 0), (0, 1), (0, -1) });
+                if (lowerDest is 'b' or 'q') dirs.AddRange(new[] { (1, 1), (1, -1), (-1, 1), (-1, -1) });
+
+                foreach (var (dx, dy) in dirs)
+                {
+                    int nx = to.X + dx, ny = to.Y + dy;
+                    char? firstEnemy = null;
+                    char? secondEnemy = null;
+
+                    while (nx >= 0 && nx < 8 && ny >= 0 && ny < 8)
+                    {
+                        char sqPiece = afterRules.Board[ny, nx];
+                        if (sqPiece != '.')
+                        {
+                            if (char.IsUpper(sqPiece) == isWhite) break; // Bloqueado por peça amiga
+                            if (firstEnemy == null)
+                                firstEnemy = sqPiece;
+                            else
+                            {
+                                secondEnemy = sqPiece;
+                                break;
+                            }
+                        }
+                        nx += dx;
+                        ny += dy;
+                    }
+
+                    if (firstEnemy.HasValue && secondEnemy.HasValue)
+                    {
+                        int val1 = PieceBaseValue(firstEnemy.Value);
+                        int val2 = PieceBaseValue(secondEnemy.Value);
+                        if (val2 > val1 && val2 >= 500)
+                        {
+                            string pinLabel = char.ToLower(secondEnemy.Value) == 'k'
+                                ? (english ? "Absolute Pin on the King" : "Cravada Absoluta no Rei (Pin)")
+                                : (english ? "Relative Pin" : "Cravada Tática (Pin)");
+                            if (!patterns.Contains(pinLabel)) patterns.Add(pinLabel);
+                        }
+                        else if (val1 > val2 && val1 >= 900 && val2 >= 320)
+                        {
+                            string skewerLabel = english ? "Tactical Skewer" : "Espeto Tático (Skewer)";
+                            if (!patterns.Contains(skewerLabel)) patterns.Add(skewerLabel);
+                        }
+                    }
+                }
+            }
+
+            // 3. Ataque / Xeque Descoberto (Discovered Attack / Check)
+            bool enemyKingInCheckAfter = afterRules.IsKingInCheck(afterRules.Board, !isWhite);
+            if (enemyKingInCheckAfter && !pseudoTargets.Any(p => char.ToLower(afterRules.Board[p.Y, p.X]) == 'k'))
+            {
+                patterns.Add(english ? "Discovered Check!" : "Xeque Descoberto!");
+            }
+
+            return patterns;
+        }
+
+        // Coach aprimorado: explica o "POR QUÊ" estratégico e tático do lance e da recomendação da IA
         public static string ExplainMoveCoach(
             ChessRules rulesBefore,
             Point from,
@@ -384,7 +387,6 @@ namespace XadrezApp
             bool playedBest,
             bool isBookMove)
         {
-            bool forWhite = rulesBefore.WhiteTurn;
             char movedPiece = rulesBefore.Board[from.Y, from.X];
             char capturedPiece = rulesBefore.Board[to.Y, to.X];
             bool isEnPassant = char.ToUpper(movedPiece) == 'P' && from.X != to.X && capturedPiece == '.';
@@ -402,14 +404,25 @@ namespace XadrezApp
             else if ((to.X == 3 || to.X == 4) && (to.Y == 3 || to.Y == 4))
                 reasons.Add("controle ativo do centro");
 
-            double beforeMover = forWhite ? beforeAnalysis.EvalWhitePawns : -beforeAnalysis.EvalWhitePawns;
-            double afterMover = forWhite ? afterAnalysis.EvalWhitePawns : -afterAnalysis.EvalWhitePawns;
-            double delta = afterMover - beforeMover;
+            // Detecta padrões táticos executados pelo jogador (Garfo, Cravada, Espeto, Descoberto)
+            var playerTactics = DetectTacticalPatterns(rulesBefore, from, to, promo, english: false);
+            if (playerTactics.Count > 0)
+                reasons.Add($"tática: {string.Join(" + ", playerTactics)}");
 
-            if (!playedBest && delta < -0.90 && beforeAnalysis.BestMove.HasValue)
+            // Explica desenvolvimento ou atividade no final
+            if (char.ToUpper(movedPiece) is 'N' or 'B' && from.Y == 7 && to.Y < 7)
+                reasons.Add("desenvolve peça menor rumo ao centro");
+            else if (char.ToUpper(movedPiece) == 'K' && IsEndgamePhase(rulesBefore.Board))
+                reasons.Add("ativa o Rei no final de partida");
+
+            double delta = afterAnalysis.EvalWhitePawns - beforeAnalysis.EvalWhitePawns;
+            if (!playedBest && delta < -0.50 && beforeAnalysis.BestMove.HasValue)
             {
-                string bestAlg = FormatMoveUciOrAlg(beforeAnalysis.BestMove.Value.from, beforeAnalysis.BestMove.Value.to, beforeAnalysis.Promotion);
-                reasons.Add($"perdeu {Math.Abs(delta):0.00} peões em relação a {bestAlg}");
+                var bestFrom = beforeAnalysis.BestMove.Value.from;
+                var bestTo = beforeAnalysis.BestMove.Value.to;
+                string bestAlg = FormatMoveUciOrAlg(bestFrom, bestTo, beforeAnalysis.Promotion);
+                string whyBest = ExplainWhyMoveIsRecommended(rulesBefore, bestFrom, bestTo, beforeAnalysis.Promotion);
+                reasons.Add($"perdeu {Math.Abs(delta):0.00} peões — melhor era {bestAlg} porque {whyBest}");
             }
 
             if (reasons.Count == 0)
@@ -418,7 +431,42 @@ namespace XadrezApp
             return string.Join(", ", reasons);
         }
 
-        // Gera um relatório completo da posição atual para o botão "Analisar Posição (IA)"
+        // Explica em linguagem simples POR QUE a IA recomenda determinado lance
+        public static string ExplainWhyMoveIsRecommended(ChessRules rules, Point from, Point to, char? promo = null, bool english = false)
+        {
+            char piece = rules.Board[from.Y, from.X];
+            char target = rules.Board[to.Y, to.X];
+            char upper = char.ToUpper(piece);
+
+            var tactics = DetectTacticalPatterns(rules, from, to, promo, english);
+            if (tactics.Count > 0)
+                return english ? $"executes {string.Join(" & ", tactics)}" : $"executa {string.Join(" e ", tactics)}";
+
+            if (upper == 'K' && Math.Abs(to.X - from.X) == 2)
+                return english ? "castles the King to safety and activates the Rook" : "coloca o Rei em segurança com o Roque e ativa a Torre";
+
+            if (upper == 'P' && (to.Y == 0 || to.Y == 7))
+                return english ? "promotes the pawn to a decisive piece" : "promove o peão ganhando material decisivo";
+
+            if (target != '.')
+                return english ? $"captures enemy {PieceNamePt(target)} winning material/initiative" : $"captura {PieceNamePt(target)} adversário ganhando material/iniciativa";
+
+            if ((to.X == 3 || to.X == 4) && (to.Y == 3 || to.Y == 4))
+                return english ? "fights directly for central control (d4/e4/d5/e5)" : "domina diretamente as casas centrais do tabuleiro";
+
+            if (upper is 'N' or 'B' && (from.Y == 7 || from.Y == 0))
+                return english ? "develops a minor piece to an active square" : "desenvolve uma peça menor para uma casa ativa";
+
+            if (upper == 'R' && (to.X == 3 || to.X == 4))
+                return english ? "places the Rook on a central file" : "centraliza a Torre nas colunas 'd' ou 'e'";
+
+            if (upper == 'K' && IsEndgamePhase(rules.Board))
+                return english ? "centralizes the King to support pawns in the endgame" : "centraliza o Rei para apoiar os peões no final";
+
+            return english ? "improves piece coordination and prophylaxis" : "melhora a coordenação das peças e restringe o adversário";
+        }
+
+        // Relatório Completo da Posição com Top 3 Lances (MultiPV), Árvore de Variantes, Explicação e Lição de Abertura
         public static string BuildPositionReport(ChessRules rules, EngineAnalysisResult analysis)
         {
             int whiteMat = 0, blackMat = 0, minorMajorCount = 0;
@@ -444,16 +492,33 @@ namespace XadrezApp
                 ? "Equilíbrio material"
                 : (matDiff > 0 ? $"Brancas +{matDiff:0.0} pts de material" : $"Pretas +{Math.Abs(matDiff):0.0} pts de material");
 
-            string pvSan = ChessRules.FormatUciPvToSan(rules, analysis.PrincipalVariation);
-
             var sb = new StringBuilder();
             sb.AppendLine($"=== ANÁLISE PROFUNDA DA IA ({phase}) ===");
             sb.AppendLine($"• Avaliação Global: {analysis.EvalText} (Chance estimada das Brancas: {EvalToWinProbability(analysis.EvalWhitePawns) * 100:0.0}%)");
             sb.AppendLine($"• Material: {matText} | Abertura: {StudyLibrary.DetectOpening(rules.SanMoves)}");
+
+            if (analysis.BestMove.HasValue)
+            {
+                string why = ExplainWhyMoveIsRecommended(rules, analysis.BestMove.Value.from, analysis.BestMove.Value.to, analysis.Promotion);
+                string bestStr = FormatMoveUciOrAlg(analysis.BestMove.Value.from, analysis.BestMove.Value.to, analysis.Promotion);
+                sb.AppendLine($"• Por que jogar {bestStr}? Porque {why}.");
+            }
+
             if (analysis.TopMovesSummary.Count > 0)
-                sb.AppendLine($"• Melhores Candidatos: {string.Join("  |  ", analysis.TopMovesSummary)}");
-            if (!string.IsNullOrWhiteSpace(pvSan))
-                sb.AppendLine($"• Linha Principal (PV): {pvSan}");
+                sb.AppendLine($"• Melhores 3 Lances (MultiPV): {string.Join("  |  ", analysis.TopMovesSummary)}");
+
+            if (analysis.VariationTreeLines.Count > 0)
+            {
+                sb.AppendLine("• Árvore de Variantes Calculadas:");
+                foreach (var branch in analysis.VariationTreeLines)
+                    sb.AppendLine($"    ├─ {branch}");
+            }
+            else if (!string.IsNullOrWhiteSpace(analysis.PrincipalVariation))
+            {
+                sb.AppendLine($"• Linha Principal (PV): {analysis.PrincipalVariation}");
+            }
+
+            sb.AppendLine($"• {StudyLibrary.GetOpeningLesson(rules.SanMoves)}");
             return sb.ToString().TrimEnd();
         }
 
@@ -474,62 +539,27 @@ namespace XadrezApp
             return $"{ChessRules.SquareToAlgebraic(from)}-{ChessRules.SquareToAlgebraic(to)}{suffix}";
         }
 
-        // Método para pedir a melhor jogada (para Ajuda de Lance, Avaliação Pós-Lance ou para o Bot jogar)
-        public EngineAnalysisResult Analyze(
-            ChessRules rules,
-            bool forWhite,
-            int difficultyLevel,
-            bool isHintOrEvaluationOnly = false,
-            CancellationToken cancellationToken = default)
+        // Analisa a posição com dificuldade bem diferenciada:
+        // 0 = Iniciante (~800 Elo), 1 = Amador (~1250 Elo), 2 = Clube (~1750 Elo), 3 = Mestre (~2400+ Elo)
+        public EngineAnalysisResult Analyze(ChessRules rules, bool forWhite, int difficultyLevel, bool isHintOrEvaluationOnly = false)
         {
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            lock (stdinLock)
-            {
-                activeSearchCts = linkedCts;
-            }
-            var token = linkedCts.Token;
+            int skill = isHintOrEvaluationOnly ? 20 : difficultyLevel switch { 0 => 0, 1 => 5, 2 => 12, _ => 20 };
+            int sfDepth = isHintOrEvaluationOnly ? 13 : difficultyLevel switch { 0 => 2, 1 => 5, 2 => 10, _ => 15 };
 
-            try
+            if (IsUsingStockfish)
             {
-                // No modo Fácil (0) para o bot jogar, usa diretamente o motor interno com filtro por centipeões
-                // (evita rodar o Stockfish à toa e descartar 70% das buscas!)
-                bool useStockfish = IsUsingStockfish && (isHintOrEvaluationOnly || difficultyLevel > 0);
-                if (useStockfish)
-                {
-                    int skill = isHintOrEvaluationOnly ? 20 : difficultyLevel switch { 0 => 0, 1 => 6, 2 => 13, _ => 20 };
-                    int sfDepth = isHintOrEvaluationOnly ? 12 : difficultyLevel switch { 0 => 1, 1 => 5, 2 => 10, _ => 15 };
-                    var sfRes = QueryStockfish(rules, forWhite, skill, sfDepth, difficultyLevel, isHintOrEvaluationOnly, token);
-                    if (sfRes != null) return sfRes;
-                }
+                var sfRes = QueryStockfish(rules, forWhite, skill, sfDepth, difficultyLevel, isHintOrEvaluationOnly);
+                if (sfRes != null) return sfRes;
+            }
 
-                // Motor Interno Posicional + Tático (respeita roque, en passant, promoção, afogamento e cancelamento)
-                return QueryInternalEngine(rules, forWhite, difficultyLevel, isHintOrEvaluationOnly, token);
-            }
-            finally
-            {
-                lock (stdinLock)
-                {
-                    if (ReferenceEquals(activeSearchCts, linkedCts))
-                        activeSearchCts = null;
-                }
-            }
+            return QueryInternalEngine(rules, forWhite, difficultyLevel, isHintOrEvaluationOnly);
         }
 
-        private EngineAnalysisResult? QueryStockfish(
-            ChessRules rules,
-            bool forWhite,
-            int skill,
-            int depth,
-            int difficultyLevel,
-            bool isHintOrEvaluationOnly,
-            CancellationToken token)
+        private EngineAnalysisResult? QueryStockfish(ChessRules rules, bool forWhite, int skill, int depth, int difficultyLevel, bool isHintOrEvaluationOnly)
         {
             stockfishLock.Wait();
             try
             {
-                if (token.IsCancellationRequested)
-                    return new EngineAnalysisResult { WasCancelled = true };
-
                 string fen = rules.ToFen();
                 var sw = stockfishProcess!.StandardInput;
                 var sr = stockfishProcess.StandardOutput;
@@ -537,14 +567,16 @@ namespace XadrezApp
                 bool limitStrength = !isHintOrEvaluationOnly && difficultyLevel < 3;
                 int targetElo = difficultyLevel switch
                 {
-                    0 => 1320,
-                    1 => 1500,
-                    2 => 1900,
-                    _ => 2850
+                    0 => 1320, // Iniciante (combinado com seleção humana)
+                    1 => 1450, // Amador
+                    2 => 1850, // Clube
+                    _ => 2850  // Mestre
                 };
 
                 lock (stdinLock)
                 {
+                    // MultiPV = 3 para obter os 3 melhores lances e a árvore de variantes!
+                    sw.WriteLine("setoption name MultiPV value 3");
                     if (limitStrength)
                     {
                         sw.WriteLine("setoption name UCI_LimitStrength value true");
@@ -557,15 +589,11 @@ namespace XadrezApp
                     sw.WriteLine($"setoption name Skill Level value {skill}");
                     sw.WriteLine($"position fen {fen}");
                     sw.WriteLine($"go depth {depth}");
-                    sw.Flush();
                 }
 
                 string lastInfoLine = "";
-                string pvLine = "";
                 long nodes = 0;
-                double whitePawns = 0.0;
-                int? mateInMoves = null;
-                string evalStr = "+0.00";
+                var multiPvData = new Dictionary<int, (string firstMove, double whitePawns, string evalStr, string pvLine)>();
                 string? line;
 
                 while ((line = sr.ReadLine()) != null)
@@ -573,60 +601,113 @@ namespace XadrezApp
                     if (line.StartsWith("info") && line.Contains(" pv "))
                     {
                         lastInfoLine = line;
+                        int mpv = 1;
+                        long lineNodes = nodes;
+                        double wp = 0.0;
+                        string evStr = "+0.00";
+
                         int pvIdx = line.IndexOf(" pv ", StringComparison.Ordinal);
-                        if (pvIdx >= 0)
-                            pvLine = line[(pvIdx + 4)..].Trim();
+                        string pv = pvIdx >= 0 ? line[(pvIdx + 4)..].Trim() : "";
+                        string firstMv = pv.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
 
                         var parts = line.Split(' ');
                         for (int i = 0; i < parts.Length - 1; i++)
                         {
-                            if (parts[i] == "nodes") long.TryParse(parts[i + 1], out nodes);
+                            if (parts[i] == "multipv" && int.TryParse(parts[i + 1], out int parsedMpv))
+                                mpv = parsedMpv;
+                            if (parts[i] == "nodes")
+                                long.TryParse(parts[i + 1], out lineNodes);
                             if (parts[i] == "cp" && int.TryParse(parts[i + 1], out int cp))
                             {
-                                mateInMoves = null;
-                                whitePawns = (forWhite ? cp : -cp) / 100.0;
-                                evalStr = (whitePawns >= 0 ? "+" : "") + whitePawns.ToString("0.00", CultureInfo.InvariantCulture);
+                                wp = (forWhite ? cp : -cp) / 100.0;
+                                evStr = (wp >= 0 ? "+" : "") + wp.ToString("0.00", CultureInfo.InvariantCulture);
                             }
                             else if (parts[i] == "mate" && int.TryParse(parts[i + 1], out int mateIn))
                             {
                                 int m = forWhite ? mateIn : -mateIn;
-                                mateInMoves = m;
-                                whitePawns = m > 0 ? 99.0 : -99.0;
-                                evalStr = m > 0 ? $"#+{m}" : $"#{m}";
+                                wp = m > 0 ? 99.0 : -99.0;
+                                evStr = $"#{m}";
                             }
                         }
+
+                        nodes = Math.Max(nodes, lineNodes);
+                        if (!string.IsNullOrEmpty(firstMv))
+                            multiPvData[mpv] = (firstMv, wp, evStr, pv);
                     }
                     else if (line.StartsWith("bestmove"))
                     {
-                        if (token.IsCancellationRequested)
-                            return new EngineAnalysisResult { WasCancelled = true };
-
                         string[] parts = line.Split(' ');
                         if (parts.Length >= 2 && parts[1].Length >= 4 && parts[1] != "(none)")
                         {
                             string mv = parts[1];
-                            int fCol = mv[0] - 'a';
-                            int fRow = 8 - (mv[1] - '0');
-                            int tCol = mv[2] - 'a';
-                            int tRow = 8 - (mv[3] - '0');
-                            var chosenMove = (new Point(fCol, fRow), new Point(tCol, tRow));
+                            var parsedBest = ParseUciMoveString(mv, forWhite);
+                            if (!parsedBest.HasValue) break;
 
-                            char? promo = null;
-                            if (mv.Length >= 5 && "qrbnQRBN".IndexOf(mv[4]) >= 0)
-                                promo = forWhite ? char.ToUpper(mv[4]) : char.ToLower(mv[4]);
+                            var chosenMove = (parsedBest.Value.from, parsedBest.Value.to);
+                            char? promo = parsedBest.Value.promo;
 
-                            string chosenUci = FormatMoveUciOrAlg(chosenMove.Item1, chosenMove.Item2, promo);
+                            double whitePawns = multiPvData.TryGetValue(1, out var pv1) ? pv1.whitePawns : 0.0;
+                            string evalStr = multiPvData.TryGetValue(1, out pv1) ? pv1.evalStr : "+0.00";
+                            string pvLine = multiPvData.TryGetValue(1, out pv1) ? pv1.pvLine : mv;
+
+                            (Point from, Point to)? secondMove = null;
+                            char? secondPromo = null;
+                            string secondEval = "";
+                            if (multiPvData.TryGetValue(2, out var pv2))
+                            {
+                                var p2 = ParseUciMoveString(pv2.firstMove, forWhite);
+                                if (p2.HasValue)
+                                {
+                                    secondMove = (p2.Value.from, p2.Value.to);
+                                    secondPromo = p2.Value.promo;
+                                    secondEval = pv2.evalStr;
+                                }
+                            }
+
+                            var topSummary = new List<string>();
+                            var treeLines = new List<string>();
+                            foreach (var kv in multiPvData.OrderBy(k => k.Key).Take(3))
+                            {
+                                var pm = ParseUciMoveString(kv.Value.firstMove, forWhite);
+                                string alg = pm.HasValue
+                                    ? FormatMoveUciOrAlg(pm.Value.from, pm.Value.to, pm.Value.promo)
+                                    : kv.Value.firstMove;
+                                topSummary.Add($"{kv.Key}º {alg} ({kv.Value.evalStr})");
+                                treeLines.Add($"[Linha {kv.Key} | {kv.Value.evalStr}] {kv.Value.pvLine}");
+                            }
+
+                            // Nos níveis Iniciante (0) e Amador (1), usa seleção humana ponderada para diferenciar bem os níveis
+                            if (!isHintOrEvaluationOnly && difficultyLevel <= 1)
+                            {
+                                double humanChance = difficultyLevel == 0 ? 0.75 : 0.40;
+                                if (rng.NextDouble() < humanChance)
+                                {
+                                    var humanFallback = QueryInternalEngine(rules, forWhite, difficultyLevel, false);
+                                    if (humanFallback.BestMove.HasValue)
+                                    {
+                                        chosenMove = humanFallback.BestMove.Value;
+                                        promo = humanFallback.Promotion;
+                                    }
+                                }
+                            }
+
+                            if (topSummary.Count == 0)
+                                topSummary.Add($"1º {FormatMoveUciOrAlg(chosenMove.from, chosenMove.to, promo)} ({evalStr})");
+
                             return new EngineAnalysisResult
                             {
                                 BestMove = chosenMove,
                                 Promotion = promo,
+                                SecondBestMove = secondMove,
+                                SecondBestPromotion = secondPromo,
+                                SecondBestEvalText = secondEval,
                                 EvalWhitePawns = whitePawns,
                                 EvalText = evalStr,
-                                MateInMoves = mateInMoves,
                                 Nodes = nodes,
                                 PrincipalVariation = pvLine,
-                                TopMovesSummary = new List<string> { $"1º {chosenUci} ({evalStr})" },
-                                LogLine = $"[Stockfish d={depth}] {mv} ({evalStr}) | {lastInfoLine}"
+                                TopMovesSummary = topSummary,
+                                VariationTreeLines = treeLines,
+                                LogLine = $"[Stockfish MultiPV d={depth}] {mv} ({evalStr}) | {lastInfoLine}"
                             };
                         }
                         break;
@@ -641,26 +722,32 @@ namespace XadrezApp
             return null;
         }
 
-        private EngineAnalysisResult QueryInternalEngine(
-            ChessRules rules,
-            bool forWhite,
-            int difficultyLevel,
-            bool isHintOrEvaluationOnly,
-            CancellationToken token)
+        private static (Point from, Point to, char? promo)? ParseUciMoveString(string mv, bool forWhite)
+        {
+            if (string.IsNullOrWhiteSpace(mv) || mv.Length < 4) return null;
+            int fCol = mv[0] - 'a';
+            int fRow = 8 - (mv[1] - '0');
+            int tCol = mv[2] - 'a';
+            int tRow = 8 - (mv[3] - '0');
+            if (fCol < 0 || fCol > 7 || fRow < 0 || fRow > 7 || tCol < 0 || tCol > 7 || tRow < 0 || tRow > 7)
+                return null;
+
+            char? promo = null;
+            if (mv.Length >= 5 && "qrbnQRBN".IndexOf(mv[4]) >= 0)
+                promo = forWhite ? char.ToUpper(mv[4]) : char.ToLower(mv[4]);
+
+            return (new Point(fCol, fRow), new Point(tCol, tRow), promo);
+        }
+
+        private EngineAnalysisResult QueryInternalEngine(ChessRules rules, bool forWhite, int difficultyLevel, bool isHintOrEvaluationOnly)
         {
             var legalBaseMoves = rules.GetAllLegalMoves(forWhite);
             if (legalBaseMoves.Count == 0)
             {
                 bool inCheck = rules.IsKingInCheck(rules.Board, forWhite);
                 double mateOrDraw = inCheck ? (forWhite ? -99.0 : 99.0) : 0.0;
-                string txt = inCheck ? (forWhite ? "#-0" : "#+0") : "0.00";
-                return new EngineAnalysisResult
-                {
-                    BestMove = null,
-                    EvalWhitePawns = mateOrDraw,
-                    EvalText = txt,
-                    MateInMoves = inCheck ? 0 : null
-                };
+                string txt = inCheck ? (forWhite ? "#-0" : "#0") : "0.00";
+                return new EngineAnalysisResult { BestMove = null, EvalWhitePawns = mateOrDraw, EvalText = txt };
             }
 
             var rootCandidates = new List<SearchMove>();
@@ -682,23 +769,21 @@ namespace XadrezApp
 
             rootCandidates = rootCandidates.OrderBy(_ => rng.Next()).ToList();
 
+            // Profundidade escalonada por dificuldade (Iniciante=2, Amador=2, Clube=4, Mestre/Análise=4)
             int searchDepth = isHintOrEvaluationOnly ? 4 : difficultyLevel switch
             {
-                0 => 2,
-                1 => 2,
-                2 => 4,
-                _ => 4
+                0 => 2, // Iniciante
+                1 => 2, // Amador
+                2 => 4, // Clube
+                _ => 4  // Mestre
             };
 
             byte rootCastling = PackCastlingRights(rules.CastleWK, rules.CastleWQ, rules.CastleBK, rules.CastleBQ);
             long searchedNodes = 0;
-            var scoredMoves = new List<(SearchMove move, int whiteScore)>();
+            var scoredMoves = new List<(SearchMove move, int whiteScore, string pvLine)>();
 
             foreach (var mv in rootCandidates)
             {
-                if (token.IsCancellationRequested && scoredMoves.Count > 0)
-                    break;
-
                 char[,] copy = ApplyMoveOnCopy(rules.Board, mv.From, mv.To, mv.Promotion, out Point? nextEp, rootCastling, out byte nextCastling);
 
                 int repetitionPenalty = 0;
@@ -706,12 +791,24 @@ namespace XadrezApp
                 if (rules.PositionHistory.Any(h => h.StartsWith(nextBoardHash)))
                     repetitionPenalty = forWhite ? -65 : 65;
 
-                int val = SearchAlphaBeta(rules, copy, searchDepth - 1, -1000000, 1000000, !forWhite, nextEp, nextCastling, ref searchedNodes, token);
+                int val = SearchAlphaBeta(
+                    rules,
+                    copy,
+                    searchDepth - 1,
+                    -1000000,
+                    1000000,
+                    !forWhite,
+                    nextEp,
+                    nextCastling,
+                    ref searchedNodes,
+                    out string childPv);
 
                 if (Math.Abs(val) < 40000)
                     val += repetitionPenalty;
 
-                scoredMoves.Add((mv, val));
+                string rootAlg = FormatMoveUciOrAlg(mv.From, mv.To, mv.Promotion);
+                string fullPv = string.IsNullOrEmpty(childPv) ? rootAlg : $"{rootAlg} -> {childPv}";
+                scoredMoves.Add((mv, val, fullPv));
             }
 
             if (forWhite)
@@ -720,61 +817,95 @@ namespace XadrezApp
                 scoredMoves = scoredMoves.OrderBy(m => m.whiteScore).ToList();
 
             var topMove = scoredMoves[0];
-            var selectedMove = topMove.move;
+            var selectedMove = SelectHumanWeightedMove(scoredMoves, forWhite, difficultyLevel, isHintOrEvaluationOnly);
 
-            // Seleção filtrada por perda em centipeões (sem entregar mate imediato!) nos modos Fácil e Médio
-            if (!isHintOrEvaluationOnly && difficultyLevel == 0 && scoredMoves.Count > 1)
+            (Point from, Point to)? secondMove = null;
+            char? secondPromo = null;
+            string secondEvalText = "";
+            if (scoredMoves.Count > 1)
             {
-                int bestMoverScore = forWhite ? topMove.whiteScore : -topMove.whiteScore;
-                // Filtra lances que não levem mate forçado (moverScore > -40000) e percam no máximo 240 cp
-                var safeHumanMoves = scoredMoves
-                    .Skip(1)
-                    .Where(m =>
-                    {
-                        int s = forWhite ? m.whiteScore : -m.whiteScore;
-                        return s > -40000 && (bestMoverScore - s) <= 240;
-                    })
-                    .Take(4)
-                    .ToList();
-
-                if (safeHumanMoves.Count > 0 && rng.NextDouble() < 0.75)
-                {
-                    selectedMove = safeHumanMoves[rng.Next(safeHumanMoves.Count)].move;
-                }
-            }
-            else if (!isHintOrEvaluationOnly && difficultyLevel == 1 && scoredMoves.Count > 1 && rng.NextDouble() < 0.25)
-            {
-                int bestMoverScore = forWhite ? topMove.whiteScore : -topMove.whiteScore;
-                int secondMoverScore = forWhite ? scoredMoves[1].whiteScore : -scoredMoves[1].whiteScore;
-                if (secondMoverScore > -40000 && (bestMoverScore - secondMoverScore) <= 120)
-                    selectedMove = scoredMoves[1].move;
+                secondMove = (scoredMoves[1].move.From, scoredMoves[1].move.To);
+                secondPromo = scoredMoves[1].move.Promotion;
+                secondEvalText = FormatScoreText(scoredMoves[1].whiteScore);
             }
 
             double evalPawns = FormatScoreToWhitePawns(topMove.whiteScore);
-            int? mateInMoves = ComputeMateInMoves(topMove.whiteScore, searchDepth);
-            string formattedEval = FormatScoreText(topMove.whiteScore, searchDepth);
+            string formattedEval = FormatScoreText(topMove.whiteScore);
             string moveAlg = FormatMoveUciOrAlg(selectedMove.From, selectedMove.To, selectedMove.Promotion);
 
             var topSummary = scoredMoves
                 .Take(3)
-                .Select((m, idx) => $"{idx + 1}º {FormatMoveUciOrAlg(m.move.From, m.move.To, m.move.Promotion)} ({FormatScoreText(m.whiteScore, searchDepth)})")
+                .Select((m, idx) => $"{idx + 1}º {FormatMoveUciOrAlg(m.move.From, m.move.To, m.move.Promotion)} ({FormatScoreText(m.whiteScore)})")
                 .ToList();
 
-            string log = $"[Engine d={searchDepth}] Best:{moveAlg} Eval:{formattedEval} Nodes:{searchedNodes} | Top: {string.Join(", ", topSummary)}";
+            var variationTree = scoredMoves
+                .Take(3)
+                .Select((m, idx) => $"[Variante {idx + 1} | {FormatScoreText(m.whiteScore)}] {m.pvLine}")
+                .ToList();
+
+            string log = $"[Engine MultiPV d={searchDepth}] Best:{moveAlg} Eval:{formattedEval} Nodes:{searchedNodes} | Top 3: {string.Join(", ", topSummary)}";
 
             return new EngineAnalysisResult
             {
                 BestMove = (selectedMove.From, selectedMove.To),
                 Promotion = selectedMove.Promotion,
+                SecondBestMove = secondMove,
+                SecondBestPromotion = secondPromo,
+                SecondBestEvalText = secondEvalText,
                 EvalWhitePawns = evalPawns,
                 EvalText = formattedEval,
-                MateInMoves = mateInMoves,
                 Nodes = searchedNodes,
-                PrincipalVariation = FormatMoveUciOrAlg(topMove.move.From, topMove.move.To, topMove.move.Promotion),
+                PrincipalVariation = topMove.pvLine,
                 TopMovesSummary = topSummary,
-                LogLine = log,
-                WasCancelled = token.IsCancellationRequested
+                VariationTreeLines = variationTree,
+                LogLine = log
             };
+        }
+
+        // Seleção de lances humanos diferenciada para os 4 níveis (Iniciante, Amador, Clube, Mestre)
+        private static SearchMove SelectHumanWeightedMove(
+            List<(SearchMove move, int whiteScore, string pvLine)> scoredMoves,
+            bool forWhite,
+            int difficultyLevel,
+            bool isHintOrEvaluationOnly)
+        {
+            if (isHintOrEvaluationOnly || difficultyLevel >= 3 || scoredMoves.Count <= 1)
+                return scoredMoves[0].move; // Mestre ou Dica: joga sempre o #1 objetivo
+
+            int bestScore = scoredMoves[0].whiteScore;
+
+            // Clube (2): joga quase sempre o #1, mas se o #2 estiver a menos de 0.25 peões, varia humanamente (30%)
+            if (difficultyLevel == 2)
+            {
+                int diff2 = Math.Abs(bestScore - scoredMoves[1].whiteScore);
+                if (diff2 <= 25 && rng.NextDouble() < 0.30)
+                    return scoredMoves[1].move;
+                return scoredMoves[0].move;
+            }
+
+            // Amador (1): escolhe entre os top 3 lances razoáveis (que não entreguem mais de 1.5 peões de uma vez)
+            if (difficultyLevel == 1)
+            {
+                var reasonable = scoredMoves
+                    .Take(4)
+                    .Where(m => Math.Abs(bestScore - m.whiteScore) <= 160)
+                    .ToList();
+                if (reasonable.Count > 1 && rng.NextDouble() < 0.55)
+                    return reasonable[rng.Next(1, reasonable.Count)].move;
+                return scoredMoves[0].move;
+            }
+
+            // Iniciante (0): escolhe entre o 2º e o 6º lance (evitando levar mate imediato se houver outra opção)
+            var nonMateCandidates = scoredMoves
+                .Skip(1)
+                .Take(5)
+                .Where(m => Math.Abs(m.whiteScore) < 40000)
+                .ToList();
+
+            if (nonMateCandidates.Count > 0)
+                return nonMateCandidates[rng.Next(nonMateCandidates.Count)].move;
+
+            return scoredMoves[Math.Min(1, scoredMoves.Count - 1)].move;
         }
 
         private static double FormatScoreToWhitePawns(int whiteScore)
@@ -784,20 +915,10 @@ namespace XadrezApp
             return whiteScore / 100.0;
         }
 
-        private static int? ComputeMateInMoves(int whiteScore, int rootSearchDepth)
+        private static string FormatScoreText(int whiteScore)
         {
-            if (Math.Abs(whiteScore) < 40000) return null;
-            int remDepth = Math.Max(0, (Math.Abs(whiteScore) - 50000) / 100);
-            int plies = Math.Max(1, rootSearchDepth - remDepth);
-            int moves = Math.Max(1, (plies + 1) / 2);
-            return whiteScore > 0 ? moves : -moves;
-        }
-
-        private static string FormatScoreText(int whiteScore, int rootSearchDepth = 4)
-        {
-            int? mateIn = ComputeMateInMoves(whiteScore, rootSearchDepth);
-            if (mateIn.HasValue)
-                return mateIn.Value > 0 ? $"#+{mateIn.Value}" : $"#{mateIn.Value}";
+            if (whiteScore >= 40000) return "#+";
+            if (whiteScore <= -40000) return "#-";
             double pawns = whiteScore / 100.0;
             return (pawns >= 0 ? "+" : "") + pawns.ToString("0.00", CultureInfo.InvariantCulture);
         }
@@ -812,14 +933,12 @@ namespace XadrezApp
             Point? epTarget,
             byte castling,
             ref long nodes,
-            CancellationToken token)
+            out string bestPvLine)
         {
             nodes++;
-            if ((nodes & 255) == 0 && token.IsCancellationRequested)
-                return EvaluateBoardWhiteRelative(b);
-
+            bestPvLine = "";
             if (depth <= 0)
-                return QuiescenceCaptures(rules, b, alpha, beta, whiteToMove, epTarget, 2, ref nodes, token);
+                return QuiescenceCaptures(rules, b, alpha, beta, whiteToMove, epTarget, 3, ref nodes);
 
             var moves = GeneratePseudoLegalOrdered(b, whiteToMove, epTarget, castling, capturesOnly: false);
             int legalMovesFound = 0;
@@ -835,16 +954,20 @@ namespace XadrezApp
                     if (rules.IsKingInCheck(copy, true)) continue;
 
                     legalMovesFound++;
-                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, false, nextEp, nextCastling, ref nodes, token);
-                    if (eval > maxEval) maxEval = eval;
+                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, false, nextEp, nextCastling, ref nodes, out string childPv);
+                    if (eval > maxEval)
+                    {
+                        maxEval = eval;
+                        string alg = FormatMoveUciOrAlg(mv.From, mv.To, mv.Promotion);
+                        bestPvLine = string.IsNullOrEmpty(childPv) ? alg : $"{alg} -> {childPv}";
+                    }
                     if (eval > alpha) alpha = eval;
-                    if (beta <= alpha || token.IsCancellationRequested) break;
+                    if (beta <= alpha) break;
                 }
 
                 if (legalMovesFound == 0)
-                {
                     return rules.IsKingInCheck(b, true) ? (-50000 - depth * 100) : 0;
-                }
+
                 return maxEval;
             }
             else
@@ -858,16 +981,20 @@ namespace XadrezApp
                     if (rules.IsKingInCheck(copy, false)) continue;
 
                     legalMovesFound++;
-                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, true, nextEp, nextCastling, ref nodes, token);
-                    if (eval < minEval) minEval = eval;
+                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, true, nextEp, nextCastling, ref nodes, out string childPv);
+                    if (eval < minEval)
+                    {
+                        minEval = eval;
+                        string alg = FormatMoveUciOrAlg(mv.From, mv.To, mv.Promotion);
+                        bestPvLine = string.IsNullOrEmpty(childPv) ? alg : $"{alg} -> {childPv}";
+                    }
                     if (eval < beta) beta = eval;
-                    if (beta <= alpha || token.IsCancellationRequested) break;
+                    if (beta <= alpha) break;
                 }
 
                 if (legalMovesFound == 0)
-                {
                     return rules.IsKingInCheck(b, false) ? (50000 + depth * 100) : 0;
-                }
+
                 return minEval;
             }
         }
@@ -880,12 +1007,11 @@ namespace XadrezApp
             bool whiteToMove,
             Point? epTarget,
             int qDepth,
-            ref long nodes,
-            CancellationToken token)
+            ref long nodes)
         {
             nodes++;
             int standPat = EvaluateBoardWhiteRelative(b);
-            if (qDepth <= 0 || token.IsCancellationRequested) return standPat;
+            if (qDepth <= 0) return standPat;
 
             if (whiteToMove)
             {
@@ -898,7 +1024,7 @@ namespace XadrezApp
                     char[,] copy = ApplyMoveOnCopy(b, cap.From, cap.To, cap.Promotion, out Point? nextEp, 0, out _);
                     if (rules.IsKingInCheck(copy, true)) continue;
 
-                    int score = QuiescenceCaptures(rules, copy, alpha, beta, false, nextEp, qDepth - 1, ref nodes, token);
+                    int score = QuiescenceCaptures(rules, copy, alpha, beta, false, nextEp, qDepth - 1, ref nodes);
                     if (score >= beta) return beta;
                     if (score > alpha) alpha = score;
                 }
@@ -915,7 +1041,7 @@ namespace XadrezApp
                     char[,] copy = ApplyMoveOnCopy(b, cap.From, cap.To, cap.Promotion, out Point? nextEp, 0, out _);
                     if (rules.IsKingInCheck(copy, false)) continue;
 
-                    int score = QuiescenceCaptures(rules, copy, alpha, beta, true, nextEp, qDepth - 1, ref nodes, token);
+                    int score = QuiescenceCaptures(rules, copy, alpha, beta, true, nextEp, qDepth - 1, ref nodes);
                     if (score <= alpha) return alpha;
                     if (score < beta) beta = score;
                 }
@@ -964,7 +1090,6 @@ namespace XadrezApp
                         int startRow = forWhite ? 6 : 1;
                         int promoRow = forWhite ? 0 : 7;
 
-                        // Avanço de peão
                         if (Inside(c, r + dir) && b[r + dir, c] == '.')
                         {
                             bool isPromo = (r + dir) == promoRow;
@@ -984,7 +1109,6 @@ namespace XadrezApp
                             }
                         }
 
-                        // Capturas normais e En Passant
                         foreach (int dc in new[] { -1, 1 })
                         {
                             int nx = c + dc, ny = r + dir;
@@ -1189,7 +1313,7 @@ namespace XadrezApp
             return string.Join("/", rows);
         }
 
-        public static int PieceBaseValue(char p) => char.ToLower(p) switch
+        private static int PieceBaseValue(char p) => char.ToLower(p) switch
         {
             'p' => 100,
             'n' => 320,
@@ -1200,10 +1324,49 @@ namespace XadrezApp
             _ => 0
         };
 
-        // Avaliação Posicional Completa (Material + Tabelas Posicionais de Centro/Desenvolvimento/Segurança do Rei)
+        public static bool IsEndgamePhase(char[,] b)
+        {
+            int nonPawnMaterial = 0;
+            for (int r = 0; r < 8; r++)
+            {
+                for (int c = 0; c < 8; c++)
+                {
+                    char p = b[r, c];
+                    if (p == '.' || char.ToLower(p) is 'p' or 'k') continue;
+                    nonPawnMaterial += PieceBaseValue(p);
+                }
+            }
+            return nonPawnMaterial <= 2600;
+        }
+
+        private static bool IsPassedPawn(char[,] b, int row, int col, bool isWhite)
+        {
+            char enemyPawn = isWhite ? 'p' : 'P';
+            int startR = isWhite ? row - 1 : row + 1;
+            int endR = isWhite ? 0 : 7;
+            int step = isWhite ? -1 : 1;
+
+            for (int r = startR; isWhite ? (r >= endR) : (r <= endR); r += step)
+            {
+                for (int c = Math.Max(0, col - 1); c <= Math.Min(7, col + 1); c++)
+                {
+                    if (b[r, c] == enemyPawn)
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        // Avaliação Completa com Heurística de Finais (KingEndgameTable, Peões Passados e Mop-up de Rei no Final)
         public static int EvaluateBoardWhiteRelative(char[,] b)
         {
+            bool isEndgame = IsEndgamePhase(b);
             int score = 0;
+            Point? whiteKing = null;
+            Point? blackKing = null;
+
+            int[] passedPawnBonusByRank = { 0, 90, 55, 32, 18, 8, 4, 0 };
+
             for (int r = 0; r < 8; r++)
             {
                 for (int c = 0; c < 8; c++)
@@ -1211,25 +1374,53 @@ namespace XadrezApp
                     char p = b[r, c];
                     if (p == '.') continue;
 
+                    if (p == 'K') whiteKing = new Point(c, r);
+                    else if (p == 'k') blackKing = new Point(c, r);
+
                     bool isWhite = char.IsUpper(p);
                     int tableRow = isWhite ? r : (7 - r);
                     int baseVal = PieceBaseValue(p);
+                    char lower = char.ToLower(p);
 
-                    int posBonus = char.ToLower(p) switch
+                    int posBonus = lower switch
                     {
                         'p' => PawnTable[tableRow, c],
                         'n' => KnightTable[tableRow, c],
                         'b' => BishopTable[tableRow, c],
                         'r' => RookTable[tableRow, c],
                         'q' => (BishopTable[tableRow, c] + RookTable[tableRow, c]) / 2,
-                        'k' => KingTable[tableRow, c],
+                        'k' => isEndgame ? KingEndgameTable[tableRow, c] : KingMiddlegameTable[tableRow, c],
                         _ => 0
                     };
+
+                    // Bônus para Peão Passado (especialmente forte no Final)
+                    if (lower == 'p' && IsPassedPawn(b, r, c, isWhite))
+                    {
+                        int bonus = passedPawnBonusByRank[tableRow];
+                        posBonus += isEndgame ? (int)(bonus * 1.4) : bonus;
+                    }
 
                     int total = baseVal + posBonus;
                     score += isWhite ? total : -total;
                 }
             }
+
+            // Heurística de Final Ganho (Mop-Up): empurra o Rei perdedor para a borda e aproxima o Rei vencedor
+            if (isEndgame && whiteKing.HasValue && blackKing.HasValue && Math.Abs(score) >= 300)
+            {
+                int kingDist = Math.Abs(whiteKing.Value.X - blackKing.Value.X) + Math.Abs(whiteKing.Value.Y - blackKing.Value.Y);
+                if (score > 0)
+                {
+                    int blackDistFromCenter = Math.Abs(3 - blackKing.Value.X) + Math.Abs(3 - blackKing.Value.Y);
+                    score += blackDistFromCenter * 8 + (14 - kingDist) * 4;
+                }
+                else
+                {
+                    int whiteDistFromCenter = Math.Abs(3 - whiteKing.Value.X) + Math.Abs(3 - whiteKing.Value.Y);
+                    score -= whiteDistFromCenter * 8 + (14 - kingDist) * 4;
+                }
+            }
+
             return score;
         }
     }

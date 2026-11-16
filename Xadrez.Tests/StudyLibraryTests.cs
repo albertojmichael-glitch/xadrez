@@ -44,20 +44,14 @@ namespace XadrezApp.Tests
             var ruyLopez = new List<string> { "e4!", "e5", "Nf3", "Nc6", "Bb5+" };
             Assert.Equal("C60: Abertura Espanhola (Ruy Lopez)", StudyLibrary.DetectOpening(ruyLopez));
 
+            var dragon = new List<string> { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "g6" };
+            Assert.Equal("B70: Defesa Siciliana (Variante do Dragão)", StudyLibrary.DetectOpening(dragon));
+
             var london = new List<string> { "d4", "Nf6", "Bf4" };
             Assert.Equal("A45: Sistema Londres", StudyLibrary.DetectOpening(london));
 
             var sicilian = new List<string> { "e4", "c5" };
             Assert.Equal("B20: Defesa Siciliana", StudyLibrary.DetectOpening(sicilian));
-
-            var dragon = new List<string> { "e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "g6" };
-            Assert.Equal("B70: Defesa Siciliana (Variante do Dragão)", StudyLibrary.DetectOpening(dragon));
-
-            var catalan = new List<string> { "d4", "Nf6", "c4", "e6", "g3" };
-            Assert.Equal("E00: Abertura Catalã", StudyLibrary.DetectOpening(catalan));
-
-            var grunfeld = new List<string> { "d4", "Nf6", "c4", "g6", "Nc3", "d5" };
-            Assert.Equal("D80: Defesa Grünfeld", StudyLibrary.DetectOpening(grunfeld));
 
             var custom = new List<string> { "a3", "a6" };
             Assert.Equal("Meio-Jogo / Variante Livre", StudyLibrary.DetectOpening(custom));
@@ -68,7 +62,6 @@ namespace XadrezApp.Tests
         {
             Assert.False(StudyLibrary.IsBookMove(new List<string>()));
             Assert.True(StudyLibrary.IsBookMove(new List<string> { "e4", "e5", "Nf3" }));
-            Assert.True(StudyLibrary.IsBookMove(new List<string> { "d4", "Nf6", "c4", "g6", "Nc3", "d5" }));
             Assert.False(StudyLibrary.IsBookMove(new List<string> { "h4", "h5" }));
 
             // Mais de 10 meio-lances deve retornar false

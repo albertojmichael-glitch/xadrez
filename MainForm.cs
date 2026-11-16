@@ -15,6 +15,7 @@ namespace XadrezApp
 
         private bool isDarkMode = false;
         private bool isEnglish = false;
+        private InteractiveTutorial? activeTutorial = null;
 
         private MenuStrip menuStrip = null!;
         private Panel toolPanel = null!;
@@ -35,6 +36,7 @@ namespace XadrezApp
         private Button btnDraw = null!;
         private Button btnTakeback = null!;
         private Button btnHint = null!;
+        private Button btnTeacher = null!;
         private Button btnPuzzles = null!;
         private Button btnPgn = null!;
         private Button btnZoomOut = null!;
@@ -51,7 +53,7 @@ namespace XadrezApp
             Text = "MainForm - Lucas Chess & Classic Study Suite";
             ClientSize = new Size(960, 760);
             MinimumSize = new Size(960, 760);
-            FormBorderStyle = FormBorderStyle.Sizable; // Permite redimensionar e maximizar responsivamente
+            FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.FromArgb(236, 233, 216);
@@ -67,7 +69,7 @@ namespace XadrezApp
             clock = new ClockController(
                 () => game.Rules.WhiteTurn,
                 () => game.GameOver,
-                () => game.ActivePuzzle != null);
+                () => game.ActivePuzzle != null || activeTutorial != null);
             clock.ClockUpdated += UpdateClockLabels;
             clock.TimeExpired += OnClockTimeExpired;
 
@@ -102,6 +104,16 @@ namespace XadrezApp
             puzzlesMenu.DropDownItems.Add(new ToolStripSeparator());
             puzzlesMenu.DropDownItems.Add("🔙 Sair do Modo Puzzle (Partida Normal)", null, (s, e) => ResetBoard());
 
+            var tutorialsMenu = new ToolStripMenuItem("📚 Mini-Tutoriais & Lições");
+            foreach (var tut in StudyLibrary.MiniTutorials)
+            {
+                var capturedTut = tut;
+                tutorialsMenu.DropDownItems.Add($"📖 {capturedTut.Title}", null, (s, e) => StartInteractiveTutorial(capturedTut));
+            }
+            tutorialsMenu.DropDownItems.Add(new ToolStripSeparator());
+            tutorialsMenu.DropDownItems.Add("🎓 Alternar Modo Professor (Melhor Lance + Alternativo + Antes/Depois)", null, (s, e) => ToggleTeacherMode());
+            tutorialsMenu.DropDownItems.Add("💡 Ver Lição Estratégica da Abertura Atual", null, (s, e) => ShowCurrentOpeningLesson());
+
             var viewMenu = new ToolStripMenuItem("🎨 View & Acessibilidade");
             viewMenu.DropDownItems.Add("🪵 Tabuleiro: Madeira", null, (s, e) => SetTheme("Madeira"));
             viewMenu.DropDownItems.Add("🏁 Tabuleiro: Preto e Branco", null, (s, e) => SetTheme("Preto e Branco"));
@@ -116,14 +128,15 @@ namespace XadrezApp
             viewMenu.DropDownItems.Add("🔍- Diminuir Zoom do Tabuleiro (Ctrl+-)", null, (s, e) => boardView.AdjustZoom(-0.10f));
             viewMenu.DropDownItems.Add("🔍 100% Resetar Zoom (Ctrl+0)", null, (s, e) => boardView.SetZoom(1.0f));
 
-            var searchMenu = new ToolStripMenuItem("🔍 Search & Estudo");
-            searchMenu.DropDownItems.Add("🧠 Analisar Posição (IA)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(false)));
-            searchMenu.DropDownItems.Add("💡 Ajuda de Lance (Help to Move)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
+            var searchMenu = new ToolStripMenuItem("🔍 Search & Estudo (MultiPV)");
+            searchMenu.DropDownItems.Add("🧠 Analisar Posição + Melhores 3 Lances (MultiPV)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(false)));
+            searchMenu.DropDownItems.Add("💡 Ajuda de Lance (Seta 1º e 2º Lance)", null, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
             searchMenu.DropDownItems.Add(new ToolStripSeparator());
             searchMenu.DropDownItems.Add("📊 Relatório de Precisão da Partida (IA)", null, (s, e) => ShowGameAnalysisReport());
 
             menuStrip.Items.Add(fileMenu);
             menuStrip.Items.Add(puzzlesMenu);
+            menuStrip.Items.Add(tutorialsMenu);
             menuStrip.Items.Add(searchMenu);
             menuStrip.Items.Add(viewMenu);
             MainMenuStrip = menuStrip;
@@ -145,7 +158,7 @@ namespace XadrezApp
                     Location = new Point(x, 6),
                     Size = new Size(width, 32),
                     FlatStyle = FlatStyle.System,
-                    Font = new Font("Tahoma", 8f, FontStyle.Bold),
+                    Font = new Font("Tahoma", 7.8f, FontStyle.Bold),
                     Cursor = Cursors.Hand,
                     AccessibleName = text
                 };
@@ -154,37 +167,38 @@ namespace XadrezApp
                 return btn;
             }
 
-            btnReset = AddToolbarBtn("🔄 Reiniciar", 6, 74, (s, e) => ResetBoard());
-            btnResign = AddToolbarBtn("🏳️ Desistir", 82, 70, (s, e) => ResignGame());
-            btnDraw = AddToolbarBtn("🤝 Empate", 154, 68, (s, e) => OfferDraw());
-            btnTakeback = AddToolbarBtn("↩️ Voltar", 224, 72, (s, e) => TakebackMove());
-            btnHint = AddToolbarBtn("💡 Dica IA", 298, 76, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
-            btnPuzzles = AddToolbarBtn("🧩 Puzzles", 376, 72, (s, e) =>
+            btnReset = AddToolbarBtn("🔄 Reiniciar", 4, 68, (s, e) => ResetBoard());
+            btnResign = AddToolbarBtn("🏳️ Desistir", 74, 64, (s, e) => ResignGame());
+            btnDraw = AddToolbarBtn("🤝 Empate", 140, 62, (s, e) => OfferDraw());
+            btnTakeback = AddToolbarBtn("↩️ Voltar", 204, 64, (s, e) => TakebackMove());
+            btnHint = AddToolbarBtn("💡 Dica IA", 270, 68, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
+            btnTeacher = AddToolbarBtn("🎓 Prof: OFF", 340, 76, (s, e) => ToggleTeacherMode());
+            btnPuzzles = AddToolbarBtn("🧩 Puzzles", 418, 66, (s, e) =>
             {
                 if (game.ActivePuzzle != null)
                     game.CurrentPuzzleIndex = (game.CurrentPuzzleIndex + 1) % StudyLibrary.Puzzles.Count;
                 StartPuzzle(StudyLibrary.Puzzles[game.CurrentPuzzleIndex]);
             });
-            btnPgn = AddToolbarBtn("💾 PGN", 450, 58, (s, e) => ExportPgn());
-            btnZoomOut = AddToolbarBtn("🔍-", 510, 32, (s, e) => boardView.AdjustZoom(-0.10f));
-            btnZoomIn = AddToolbarBtn("🔍+", 544, 32, (s, e) => boardView.AdjustZoom(0.10f));
+            btnPgn = AddToolbarBtn("💾 PGN", 486, 52, (s, e) => ExportPgn());
+            btnZoomOut = AddToolbarBtn("🔍-", 540, 28, (s, e) => boardView.AdjustZoom(-0.10f));
+            btnZoomIn = AddToolbarBtn("🔍+", 570, 28, (s, e) => boardView.AdjustZoom(0.10f));
 
-            lblDiff = new Label { Text = "IA:", Location = new Point(580, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
-            difficultyCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(600, 11), Width = 104 };
-            difficultyCombo.Items.AddRange(new object[] { "Fácil (Iniciante)", "Médio (Clube)", "Difícil (Forte)", "Mestre (Máximo)" });
+            lblDiff = new Label { Text = "IA:", Location = new Point(602, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
+            difficultyCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(622, 11), Width = 96 };
+            difficultyCombo.Items.AddRange(new object[] { "Iniciante", "Amador", "Clube", "Mestre" });
             difficultyCombo.SelectedIndex = 0;
 
-            lblClock = new Label { Text = "Relógio:", Location = new Point(708, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
-            clockCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(756, 11), Width = 102 };
+            lblClock = new Label { Text = "Rel:", Location = new Point(722, 15), AutoSize = true, Font = new Font("Tahoma", 8f, FontStyle.Bold) };
+            clockCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(748, 11), Width = 104 };
             clockCombo.Items.AddRange(new object[] { "Fischer 5+3", "Fischer 3+2", "Fischer 10+0", "Bronstein 5+3", "Sem Relógio" });
             clockCombo.SelectedIndex = 0;
             clockCombo.SelectedIndexChanged += (s, e) =>
             {
-                bool gameInProgress = game.Rules.SanMoves.Count > 0 && !game.GameOver && game.ActivePuzzle == null;
+                bool gameInProgress = game.Rules.SanMoves.Count > 0 && !game.GameOver && game.ActivePuzzle == null && activeTutorial == null;
                 clock.ConfigureClockMode(clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3", resetRemainingTime: !gameInProgress);
             };
 
-            themeCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(862, 11), Width = 90 };
+            themeCombo = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(856, 11), Width = 96 };
             themeCombo.Items.AddRange(new object[] { "Madeira", "Preto e Branco", "Branco e Verde", "Alto Contraste" });
             themeCombo.SelectedIndex = 0;
             themeCombo.SelectedIndexChanged += (s, e) => SetTheme(themeCombo.SelectedItem?.ToString() ?? "Madeira");
@@ -297,7 +311,7 @@ namespace XadrezApp
 
             tutorStatusLabel = new Label
             {
-                Text = "Tutor ativo | Clique em 'Dica IA' ou use as Setas do Teclado + Enter!",
+                Text = "Tutor ativo | Ative '🎓 Prof' para ver Melhor Lance, Alternativo e Antes/Depois!",
                 Location = new Point(400, 590),
                 Size = new Size(548, 24),
                 BorderStyle = BorderStyle.Fixed3D,
@@ -321,13 +335,86 @@ namespace XadrezApp
                 BackColor = Color.White,
                 BorderStyle = BorderStyle.Fixed3D,
                 Font = new Font("Consolas", 8.5f),
-                AccessibleName = "Log de Análise da Engine"
+                AccessibleName = "Log de Análise da Engine e Modo Professor"
             };
             Controls.Add(engineLogBox);
         }
 
-        // Redimensionamento responsivo: no tamanho 960x760 mantém as medidas clássicas exatas;
-        // ao maximizar ou aumentar a janela, expande o tabuleiro, as listas e o log proporcionalmente.
+        private void ToggleTeacherMode()
+        {
+            analysis.IsTeacherMode = !analysis.IsTeacherMode;
+            UpdateTeacherButtonText();
+
+            if (analysis.IsTeacherMode)
+            {
+                tutorStatusLabel.Text = isEnglish
+                    ? "🎓 Teacher Mode ON: showing #1 Best (Green), #2 Alternative (Blue) & Before/After Eval!"
+                    : "🎓 Modo Professor ATIVO: mostrando 1º Melhor (Verde), 2º Alternativo (Azul) e Antes/Depois!";
+                if (!game.GameOver && !game.IsBotThinking && game.Rules.WhiteTurn)
+                    RunSafe(() => RunAnalysisAndHintAsync(true));
+            }
+            else
+            {
+                boardView.HintArrow = null;
+                boardView.AlternativeHintArrow = null;
+                boardView.Invalidate();
+                tutorStatusLabel.Text = isEnglish ? "🎓 Teacher Mode OFF." : "🎓 Modo Professor desativado.";
+            }
+        }
+
+        private void UpdateTeacherButtonText()
+        {
+            if (analysis.IsTeacherMode)
+                btnTeacher.Text = isEnglish ? "🎓 Teach: ON" : "🎓 Prof: ON";
+            else
+                btnTeacher.Text = isEnglish ? "🎓 Teach: OFF" : "🎓 Prof: OFF";
+        }
+
+        private void ShowCurrentOpeningLesson()
+        {
+            string lesson = StudyLibrary.GetOpeningLesson(game.Rules.SanMoves, isEnglish);
+            engineLogBox.AppendText($"[📖 Lição de Abertura] {lesson}" + Environment.NewLine);
+            MessageBox.Show(
+                lesson,
+                isEnglish ? "📖 Opening Strategy Lesson" : "📖 Lição Estratégica da Abertura",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        private void StartInteractiveTutorial(InteractiveTutorial tutorial)
+        {
+            ResetBoard();
+            if (!game.Rules.TryLoadFen(tutorial.Fen, out string error))
+            {
+                game.Rules.Reset();
+                MessageBox.Show($"Erro no FEN do tutorial: {error}", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            activeTutorial = tutorial;
+            openingBookLabel.Text = $"📚 {(isEnglish ? "MINI-TUTORIAL" : "MINI-TUTORIAL")}: {tutorial.Title}";
+            string lessonBody = isEnglish ? tutorial.LessonTextEn : tutorial.LessonTextPt;
+            string stepMsg = isEnglish ? tutorial.StepInstructionEn : tutorial.StepInstructionPt;
+
+            engineLogBox.Text = lessonBody + Environment.NewLine;
+            tutorStatusLabel.Text = $"📚 {stepMsg}";
+
+            // Destaca com seta verde o lance demonstrativo do tutorial
+            if (tutorial.PracticeMoveUci.Length >= 4)
+            {
+                var from = ChessRules.AlgebraicToSquare(tutorial.PracticeMoveUci[..2]);
+                var to = ChessRules.AlgebraicToSquare(tutorial.PracticeMoveUci.Substring(2, 2));
+                if (from.HasValue && to.HasValue)
+                    boardView.HintArrow = (from.Value, to.Value);
+            }
+
+            UpdateClockLabels();
+            RefreshLegalMovesTable();
+            boardView.Invalidate();
+
+            MessageBox.Show(lessonBody, $"📚 {tutorial.Title}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
         private void ApplyResponsiveLayout()
         {
             if (WindowState == FormWindowState.Minimized || boardView == null) return;
@@ -343,7 +430,7 @@ namespace XadrezApp
 
             int boardTop = 102;
             int availableBoardHeight = Math.Max(BoardView.TotalBoardSize, statusRowTop - boardTop - 8);
-            int rightListsWidth = 125 + 8 + 252; // 385px para as duas listas laterais
+            int rightListsWidth = 125 + 8 + 252;
             int availableBoardWidth = Math.Max(BoardView.TotalBoardSize, w - rightListsWidth - 36);
             int boardBoxSize = Math.Min(availableBoardHeight, availableBoardWidth);
 
@@ -436,29 +523,40 @@ namespace XadrezApp
             btnDraw.Text = isEnglish ? "🤝 Draw" : "🤝 Empate";
             btnTakeback.Text = isEnglish ? "↩️ Undo" : "↩️ Voltar";
             btnHint.Text = isEnglish ? "💡 Hint" : "💡 Dica IA";
-            btnPuzzles.Text = isEnglish ? "🧩 Puzzles" : "🧩 Puzzles";
+            UpdateTeacherButtonText();
             lblDiff.Text = isEnglish ? "AI:" : "IA:";
-            lblClock.Text = isEnglish ? "Clock:" : "Relógio:";
+            lblClock.Text = isEnglish ? "Clk:" : "Rel:";
+
+            int selDiff = difficultyCombo.SelectedIndex;
+            difficultyCombo.Items.Clear();
+            if (isEnglish)
+                difficultyCombo.Items.AddRange(new object[] { "Beginner", "Amateur", "Club", "Master" });
+            else
+                difficultyCombo.Items.AddRange(new object[] { "Iniciante", "Amador", "Clube", "Mestre" });
+            difficultyCombo.SelectedIndex = Math.Max(0, selDiff);
 
             UpdateClockLabels();
             UpdateOpeningBannerText();
             boardView.UpdateAccessibilityInfo(announceToStatus: false);
             tutorStatusLabel.Text = isEnglish
-                ? "🌐 Language switched to English | Keyboard Arrows + Enter active!"
-                : "🌐 Idioma alterado para Português | Setas do Teclado + Enter ativos!";
+                ? "🌐 Language switched to English | Teacher Mode & Mini-Tutorials ready!"
+                : "🌐 Idioma alterado para Português | Modo Professor e Mini-Tutoriais prontos!";
         }
 
         private void UpdateOpeningBannerText()
         {
+            if (activeTutorial != null)
+            {
+                openingBookLabel.Text = $"📚 MINI-TUTORIAL: {activeTutorial.Title}";
+                return;
+            }
             if (game.ActivePuzzle != null)
             {
                 openingBookLabel.Text = $"🧩 {(isEnglish ? "PUZZLE MODE" : "MODO PUZZLE")}: {game.ActivePuzzle.Title} [{game.ActivePuzzle.Theme}]";
+                return;
             }
-            else
-            {
-                string prefix = isEnglish ? "📖 Opening" : "📖 Abertura";
-                openingBookLabel.Text = $"{prefix}: {StudyLibrary.DetectOpening(game.Rules.SanMoves)}";
-            }
+            string prefix = isEnglish ? "📖 Opening" : "📖 Abertura";
+            openingBookLabel.Text = $"{prefix}: {StudyLibrary.DetectOpening(game.Rules.SanMoves)}";
         }
 
         private void UpdateClockLabels()
@@ -507,6 +605,7 @@ namespace XadrezApp
 
         private void ResetGameState()
         {
+            activeTutorial = null;
             game.ResetGameState(analysis, clock, boardView, clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3");
             moveHistoryList.Items.Clear();
         }
@@ -526,9 +625,9 @@ namespace XadrezApp
                 ? "📖 Opening: Initial Position (Waiting for 1st move)"
                 : "📖 Abertura: Posição Inicial (Aguardando 1º lance)";
             string sfStatus = analysis.IsUsingStockfish
-                ? (isEnglish ? "Official Stockfish Connected" : "Stockfish Oficial Conectado")
-                : (isEnglish ? "Internal Positional Engine Active" : "Engine Tática Posicional Interna Ativa");
-            engineLogBox.Text = $"[{sfStatus}] {(isEnglish ? "15 Puzzles and Post-Move Analysis ready." : "15 Puzzles e Análise Pós-Lance prontos.")}" + Environment.NewLine;
+                ? (isEnglish ? "Official Stockfish MultiPV Connected" : "Stockfish Oficial (MultiPV) Conectado")
+                : (isEnglish ? "Internal Positional/Endgame Engine Active" : "Engine Tática/Finais Interna (MultiPV) Ativa");
+            engineLogBox.Text = $"[{sfStatus}] {(isEnglish ? "Teacher Mode, 4 Mini-Tutorials & 15 Puzzles ready." : "Modo Professor, 4 Mini-Tutoriais e 15 Puzzles prontos.")}" + Environment.NewLine;
             tutorStatusLabel.Text = isEnglish ? "Your turn (White)" : "Sua vez (Brancas)";
 
             RefreshLegalMovesTable();
@@ -744,7 +843,11 @@ namespace XadrezApp
             int col = clicked.X;
             int row = clicked.Y;
 
-            if (game.IsBotThinking || !game.Rules.WhiteTurn)
+            // Em partidas normais o jogador controla as Brancas; no Modo Puzzle controla o lado da vez (Brancas ou Pretas)
+            bool isPuzzleMode = game.ActivePuzzle != null;
+            bool playerControlsWhite = isPuzzleMode ? game.Rules.WhiteTurn : true;
+
+            if (!isPuzzleMode && (game.IsBotThinking || !game.Rules.WhiteTurn))
             {
                 if (boardView.PremoveSelection.HasValue && boardView.PremoveSelection.Value != clicked)
                 {
@@ -780,14 +883,13 @@ namespace XadrezApp
             }
 
             char p = game.Rules.Board[row, col];
-            if (p != '.' && char.IsUpper(p))
+            if (p != '.' && char.IsUpper(p) == playerControlsWhite)
             {
                 boardView.SelectedSquare = clicked;
-                boardView.LegalMoves = game.Rules.GetLegalMovesForSquare(col, row, true);
+                boardView.LegalMoves = game.Rules.GetLegalMovesForSquare(col, row, playerControlsWhite);
             }
             else
             {
-                // Feedback visual claro de lance inválido quando uma peça estava selecionada
                 if (boardView.SelectedSquare.HasValue)
                 {
                     string fromAlg = ChessRules.SquareToAlgebraic(boardView.SelectedSquare.Value);
@@ -828,6 +930,27 @@ namespace XadrezApp
 
         private async Task ExecutePlayerAndBotTurnAsync(Point from, Point to)
         {
+            // Se estiver em um Mini-Tutorial Interativo, valida a prática e continua a partida didática!
+            if (activeTutorial != null)
+            {
+                string playedUci = $"{ChessRules.SquareToAlgebraic(from)}{ChessRules.SquareToAlgebraic(to)}";
+                bool validTutorialMove = playedUci == activeTutorial.PracticeMoveUci ||
+                                         (activeTutorial.PracticeMoveUci == "e1g1" && playedUci == "e1c1") ||
+                                         (activeTutorial.PracticeMoveUci == "e6d6" && playedUci == "e6f6") ||
+                                         (activeTutorial.PracticeMoveUci == "f1c4" && playedUci == "f1b5");
+
+                if (!validTutorialMove)
+                {
+                    boardView.TriggerInvalidMoveFlash(to);
+                    tutorStatusLabel.Text = isEnglish ? $"✖ Follow the tutorial step: {activeTutorial.StepInstructionEn}" : $"✖ Siga o passo do tutorial: {activeTutorial.StepInstructionPt}";
+                    return;
+                }
+
+                string completedTitle = activeTutorial.Title;
+                activeTutorial = null; // Concluiu o exercício guiado e segue jogando a posição contra a IA!
+                engineLogBox.AppendText($"[✅ Tutorial Concluído] {completedTitle}! Agora continue jogando a posição contra a IA." + Environment.NewLine);
+            }
+
             if (game.ActivePuzzle != null)
             {
                 HandlePuzzleMove(from, to);
@@ -936,6 +1059,16 @@ namespace XadrezApp
                     }
                     rowItem.SubItems[4].Text = evalSummary.Classification.description;
                     rowItem.SubItems[4].ForeColor = evalSummary.Classification.color;
+
+                    // Se o Modo Professor estiver ativo, registra o comparativo Antes/Depois e Melhor/Alternativo no painel!
+                    if (analysis.IsTeacherMode)
+                    {
+                        var rulesBefore = new ChessRules();
+                        rulesBefore.RestoreSnapshot(playerMove.Before);
+                        string teacherBox = AnalysisController.BuildTeacherComparisonBox(
+                            rulesBefore, playerMove.From, playerMove.To, playerMove.San, evalSummary, isEnglish);
+                        engineLogBox.AppendText(teacherBox + Environment.NewLine);
+                    }
                 }
 
                 var (botFrom, botTo, botPromo, usedFallback) = game.EnsureValidBotMove(
@@ -974,10 +1107,13 @@ namespace XadrezApp
                 if (playerMove != null && evalSummary.BestWhiteBefore != null)
                 {
                     double avgAcc = analysis.GetAverageAccuracy();
-                    string bestSuggestion = (!evalSummary.PlayedBest && !playerMove.IsBookMove && evalSummary.BestWhiteBefore.BestMove.HasValue)
-                        ? $" | {(isEnglish ? "Best" : "Melhor")}: {evalSummary.BestAlternativeStr}"
-                        : "";
-                    tutorStatusLabel.Text = $"{evalSummary.Classification.description} {evalSummary.Classification.badge} ({evalSummary.CoachNote}){bestSuggestion} | Aval: {evalSummary.EvalAfterAnalysis.EvalText} | {(isEnglish ? "Acc" : "Precisão")}: {avgAcc:0.0}%{checkAlert}";
+                    string teacherCompare = analysis.IsTeacherMode
+                        ? $" [{evalSummary.EvalComparisonText} | 1º:{evalSummary.BestAlternativeStr} / 2º:{evalSummary.SecondAlternativeStr}]"
+                        : ((!evalSummary.PlayedBest && !playerMove.IsBookMove && evalSummary.BestWhiteBefore.BestMove.HasValue)
+                            ? $" | {(isEnglish ? "Best" : "Melhor")}: {evalSummary.BestAlternativeStr}"
+                            : "");
+
+                    tutorStatusLabel.Text = $"{evalSummary.Classification.description} {evalSummary.Classification.badge} ({evalSummary.CoachNote}){teacherCompare} | {(isEnglish ? "Acc" : "Precisão")}: {avgAcc:0.0}%{checkAlert}";
                 }
                 else
                 {
@@ -985,6 +1121,12 @@ namespace XadrezApp
                 }
 
                 botTurnCompleted = true;
+
+                // Se o Modo Professor estiver ativo, já calcula e mostra automaticamente as setas 1º e 2º lance para o novo turno!
+                if (analysis.IsTeacherMode && !boardView.QueuedPremove.HasValue && !game.GameOver)
+                {
+                    _ = RunAnalysisAndHintAsync(true);
+                }
             }
             catch (Exception ex)
             {
@@ -1076,8 +1218,8 @@ namespace XadrezApp
 
             game.IsHintRunning = true;
             tutorStatusLabel.Text = isEnglish
-                ? "🔎 Calculating best tactical/positional move for you..."
-                : "🔎 Calculando o melhor lance tático/posicional para você...";
+                ? "🔎 Calculating MultiPV (Top 3 Moves & Tactical Why)..."
+                : "🔎 Calculando MultiPV (Melhores 3 Lances, Alternativo e Por Quê)...";
 
             EngineAnalysisResult res;
             try
@@ -1109,22 +1251,33 @@ namespace XadrezApp
                 if (showHintArrow)
                 {
                     boardView.HintArrow = mv;
+                    // No Modo Professor (ou na Dica), exibe também a seta do 2º lance alternativo se for legal!
+                    if (res.SecondBestMove.HasValue &&
+                        game.Rules.GetLegalMovesForSquare(res.SecondBestMove.Value.from.X, res.SecondBestMove.Value.from.Y, game.Rules.WhiteTurn)
+                            .Contains(res.SecondBestMove.Value.to))
+                    {
+                        boardView.AlternativeHintArrow = res.SecondBestMove.Value;
+                    }
+                    else
+                    {
+                        boardView.AlternativeHintArrow = null;
+                    }
                     boardView.Invalidate();
                 }
+
                 nodesTextBox.Text = res.Nodes.ToString();
                 if (!string.IsNullOrWhiteSpace(res.LogLine))
                     engineLogBox.AppendText(res.LogLine + Environment.NewLine);
 
-                if (!showHintArrow)
+                if (!showHintArrow || analysis.IsTeacherMode)
                 {
                     string report = analysis.BuildPositionReport(analysisRules, res);
                     engineLogBox.AppendText(report + Environment.NewLine);
                 }
 
-                string promoSuffix = res.Promotion.HasValue ? $"={char.ToUpper(res.Promotion.Value)}" : "";
-                string mvStr = $"{ChessRules.SquareToAlgebraic(mv.from)} -> {ChessRules.SquareToAlgebraic(mv.to)}{promoSuffix}";
-                string topCandidates = res.TopMovesSummary.Count > 1 ? $" | Candidatos: {string.Join(" / ", res.TopMovesSummary)}" : "";
-                tutorStatusLabel.Text = $"💡 {(isEnglish ? "Best AI move" : "Melhor lance IA")}: {mvStr} (Aval: {res.EvalText}){topCandidates}";
+                string whyBest = EngineService.ExplainWhyMoveIsRecommended(analysisRules, mv.from, mv.to, res.Promotion, isEnglish);
+                string top3 = res.TopMovesSummary.Count > 0 ? string.Join(" | ", res.TopMovesSummary) : "";
+                tutorStatusLabel.Text = $"💡 Top 3: {top3} — {(isEnglish ? "Why #1" : "Por quê 1º")}: {whyBest}";
             }
         }
 
