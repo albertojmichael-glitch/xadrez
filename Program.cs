@@ -23,14 +23,15 @@ namespace XadrezApp
         }
     }
 
+    // Janela Clássica para escolha de peça na Promoção do Peão
     public static class PromotionDialog
     {
-        public static char AskPiece(bool isWhite, IWin32Window? owner = null, bool english = false)
+        public static char AskPiece(bool isWhite, IWin32Window? owner = null)
         {
             using var form = new Form
             {
-                Text = english ? "👑 Pawn Promotion" : "👑 Promoção de Peão",
-                ClientSize = new Size(360, 115),
+                Text = "Promoção de Peão",
+                ClientSize = new Size(340, 110),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
                 MaximizeBox = false,
@@ -42,16 +43,20 @@ namespace XadrezApp
 
             var lbl = new Label
             {
-                Text = english ? "Choose the piece to promote your pawn:" : "Escolha a peça para promover o seu peão:",
-                Location = new Point(14, 12),
+                Text = "Escolha a peça para promover o seu peão:",
+                Location = new Point(15, 12),
                 AutoSize = true
             };
             form.Controls.Add(lbl);
 
             char selected = 'Q';
-            (string label, char code)[] options = english
-                ? new[] { ("♛ Queen", 'Q'), ("♜ Rook", 'R'), ("♝ Bishop", 'B'), ("♞ Knight", 'N') }
-                : new[] { ("♛ Rainha", 'Q'), ("♜ Torre", 'R'), ("♝ Bispo", 'B'), ("♞ Cavalo", 'N') };
+            (string label, char code)[] options =
+            {
+                ("Rainha (Q)", 'Q'),
+                ("Torre (R)", 'R'),
+                ("Bispo (B)", 'B'),
+                ("Cavalo (N)", 'N')
+            };
 
             int x = 12;
             foreach (var opt in options)
@@ -60,10 +65,9 @@ namespace XadrezApp
                 {
                     Text = opt.label,
                     Location = new Point(x, 42),
-                    Size = new Size(80, 48),
+                    Size = new Size(76, 45),
                     FlatStyle = FlatStyle.System,
-                    Cursor = Cursors.Hand,
-                    AccessibleName = opt.label
+                    Cursor = Cursors.Hand
                 };
                 char c = opt.code;
                 btn.Click += (s, e) =>
@@ -73,7 +77,7 @@ namespace XadrezApp
                     form.Close();
                 };
                 form.Controls.Add(btn);
-                x += 85;
+                x += 80;
             }
 
             if (owner != null)

@@ -13,81 +13,130 @@ namespace XadrezApp
         public bool IsHintRunning { get; set; } = false;
         public bool GameOver { get; set; } = false;
 
+        // "Geração" da partida: incrementada a cada reinício / FEN / puzzle / fim de jogo.
+        // Toda tarefa assíncrona guarda o valor no início e o confere depois de cada await;
+        // se mudou, o resultado é descartado (evita o bot jogar no tabuleiro novo).
         public int GameGeneration { get; private set; } = 0;
+
+        // "Geração" da dica/análise: incrementada a cada lance ou mudança de posição para
+        // invalidar qualquer dica atrasada calculada para uma posição anterior.
         public int HintGeneration { get; private set; } = 0;
 
-        public TacticalPuzzle? ActivePuzzle { get; private set; } = null;
+        public TacticalPuzzle? ActivePuzzle { get; set; } = null;
         public int CurrentPuzzleIndex { get; set; } = 0;
-
-        public (Point from, Point to)? LastMove { get; set; } = null;
 
         public int IncrementGameGeneration() => ++GameGeneration;
         public int IncrementHintGeneration() => ++HintGeneration;
 
-        public void ResetStateForNewGame()
+        public void InvalidateGenerations()
         {
             GameGeneration++;
             HintGeneration++;
+        }
+
+        // Zera todo o estado da partida (sem mexer no tabuleiro) e invalida tarefas assíncronas antigas.
+        public void ResetGameState(AnalysisController analysis, ClockController clock, BoardView boardView, string selectedClockMode)
+        {
+            GameGeneration++;
+            HintGeneration++;
+            analysis.StopSearch();
+
             ActivePuzzle = null;
             History.Clear();
+            analysis.ClearEvaluations();
             IsBotThinking = false;
             IsHintRunning = false;
             GameOver = false;
-            LastMove = null;
-            Rules.Reset();
+            clock.StopAndResetStopwatch();
+            boardView.ResetAllOverlays();
+
+            clock.ConfigureClockMode(selectedClockMode, resetRemainingTime: true);
         }
 
-        public bool StartPuzzle(TacticalPuzzle puzzle, out string error)
+        // Encerra a partida atual (desistência, empate, tempo, mate) descartando o lance do bot em cálculo.
+        public void EndCurrentGame(AnalysisController analysis, ClockController clock, BoardView boardView)
         {
-            ResetStateForNewGame();
-            if (!Rules.TryLoadFen(puzzle.Fen, out error))
+            GameOver = true;
+            clock.StopAndResetStopwatch();
+            GameGeneration++;
+            HintGeneration++;
+            if (IsBotThinking || IsHintRunning)
             {
-                Rules.Reset();
-                return false;
+                IsBotThinking = false;
+                IsHintRunning = false;
+                analysis.StopSearch();
             }
-
-            int idx = StudyLibrary.Puzzles.IndexOf(puzzle);
-            if (idx >= 0) CurrentPuzzleIndex = idx;
-            ActivePuzzle = puzzle;
-            return true;
+            boardView.ClearActiveSelectionAndPremove();
+            boardView.Invalidate();
         }
 
-        public void StartFromValidatedFen(string fen)
+        public void CancelRunningHint(AnalysisController analysis)
         {
-            ResetStateForNewGame();
-            Rules.LoadFen(fen);
+            HintGeneration++;
+            if (IsHintRunning)
+            {
+                IsHintRunning = false;
+                analysis.StopSearch();
+            }
         }
 
-        public bool TryTakeback()
+        public bool TryTakeback(AnalysisController analysis, ClockController clock, BoardView boardView)
         {
             if (IsBotThinking || History.Count == 0) return false;
-            HintGeneration++;
-            IsHintRunning = false;
+
+            CancelRunningHint(analysis);
 
             Rules.RestoreSnapshot(History.Pop());
             Rules.GameResult = "*";
             GameOver = false;
-            LastMove = null;
+            boardView.ClearSelectionAndHint();
+
+            analysis.RemoveLastEvaluation();
+
+            if (Rules.SanMoves.Count == 0)
+                clock.StopAndResetStopwatch();
+
             return true;
         }
 
-        public void MarkGameEnded()
+        public bool EvaluateDrawOffer()
         {
-            GameOver = true;
-            GameGeneration++;
-            HintGeneration++;
-            IsBotThinking = false;
-            IsHintRunning = false;
+            int evalWhite = EngineService.EvaluateBoardWhiteRelative(Rules.Board);
+            if (evalWhite >= -150)
+            {
+                Rules.GameResult = "1/2-1/2";
+                return true;
+            }
+            return false;
         }
 
-        public Point? FindKingSquare(bool whiteKing)
+        // Confere se o lance devolvido pela engine é legal na posição atual antes de executar;
+        // caso contrário, escolhe um lance legal alternativo das Pretas.
+        public (Point from, Point to, char? promo, bool usedFallback) EnsureValidBotMove(
+            (Point from, Point to)? candidateMove,
+            char? candidatePromo)
         {
-            char target = whiteKing ? 'K' : 'k';
-            for (int r = 0; r < 8; r++)
-                for (int c = 0; c < 8; c++)
-                    if (Rules.Board[r, c] == target)
-                        return new Point(c, r);
-            return null;
+            if (candidateMove.HasValue &&
+                Rules.GetLegalMovesForSquare(candidateMove.Value.from.X, candidateMove.Value.from.Y, false).Contains(candidateMove.Value.to) &&
+                Rules.Board[candidateMove.Value.from.Y, candidateMove.Value.from.X] != '.' &&
+                !char.IsUpper(Rules.Board[candidateMove.Value.from.Y, candidateMove.Value.from.X]))
+            {
+                return (candidateMove.Value.from, candidateMove.Value.to, candidatePromo, false);
+            }
+
+            var legal = Rules.GetAllLegalMoves(false);
+            if (legal.Count == 0)
+                throw new InvalidOperationException("O bot não tem lances legais nesta posição.");
+
+            var fallback = legal[Random.Shared.Next(legal.Count)];
+            return (fallback.from, fallback.to, null, true);
+        }
+
+        public string BuildPgn(bool isUsingStockfish)
+        {
+            string blackName = isUsingStockfish ? "Stockfish IA" : "Engine Tática Interna";
+            string? evtName = ActivePuzzle != null ? $"Puzzle: {ActivePuzzle.Title}" : null;
+            return Rules.ToPgn(blackPlayerName: blackName, eventName: evtName);
         }
     }
 }

@@ -5,59 +5,64 @@ namespace XadrezApp
 {
     public class ClockController : IDisposable
     {
-        private readonly System.Windows.Forms.Timer timer;
-        private readonly Stopwatch stopwatch = new Stopwatch();
+        private readonly System.Windows.Forms.Timer clockTimer;
+        private readonly Stopwatch clockStopwatch = new Stopwatch();
+        private readonly Func<bool> isWhiteTurnGetter;
+        private readonly Func<bool> isGameOverGetter;
+        private readonly Func<bool> isPuzzleActiveGetter;
 
-        public string Mode { get; private set; } = "Fischer 5+3";
+        public bool ClockRunning { get; private set; } = false;
+        public string TimeControlMode { get; private set; } = "Fischer 5+3";
         public double WhiteSecondsLeft { get; private set; } = 300;
         public double BlackSecondsLeft { get; private set; } = 300;
         public double IncrementSeconds { get; private set; } = 3;
         public bool IsBronsteinMode { get; private set; } = false;
-        public bool IsRunning { get; private set; } = false;
-
-        private double turnElapsedSeconds = 0;
-        private readonly Func<bool> isWhiteTurnGetter;
-        private readonly Func<bool> isPausedOrEndedGetter;
+        public double TurnElapsedSeconds { get; private set; } = 0;
 
         public event Action? ClockUpdated;
-        public event Action<bool>? TimeExpired; // true = tempo das Brancas acabou, false = Pretas
+        public event Action<bool>? TimeExpired; // true = Brancas estouraram o tempo, false = Pretas
 
-        public ClockController(Func<bool> isWhiteTurnGetter, Func<bool> isPausedOrEndedGetter)
+        public ClockController(
+            Func<bool> isWhiteTurnGetter,
+            Func<bool> isGameOverGetter,
+            Func<bool> isPuzzleActiveGetter)
         {
             this.isWhiteTurnGetter = isWhiteTurnGetter;
-            this.isPausedOrEndedGetter = isPausedOrEndedGetter;
+            this.isGameOverGetter = isGameOverGetter;
+            this.isPuzzleActiveGetter = isPuzzleActiveGetter;
 
-            timer = new System.Windows.Forms.Timer { Interval = 200 };
-            timer.Tick += OnTimerTick;
-            timer.Start();
+            // Intervalo curto + Stopwatch de alta precisão: não atrasa se a UI travar
+            // e só começa a descontar depois que o 1º lance é efetuado (ClockRunning = true).
+            clockTimer = new System.Windows.Forms.Timer { Interval = 200 };
+            clockTimer.Tick += OnClockTimerTick;
+            clockTimer.Start();
         }
 
-        private void OnTimerTick(object? sender, EventArgs e)
+        private void OnClockTimerTick(object? sender, EventArgs e)
         {
-            if (!IsRunning || Mode == "Sem Relógio" || isPausedOrEndedGetter())
+            if (isGameOverGetter() || !ClockRunning || TimeControlMode == "Sem Relógio" || isPuzzleActiveGetter())
             {
-                stopwatch.Reset();
+                clockStopwatch.Reset();
                 return;
             }
 
-            if (!stopwatch.IsRunning)
+            if (!clockStopwatch.IsRunning)
             {
-                stopwatch.Restart();
+                clockStopwatch.Restart();
                 return;
             }
 
-            double dt = stopwatch.Elapsed.TotalSeconds;
+            double dt = clockStopwatch.Elapsed.TotalSeconds;
             if (dt <= 0) return;
-            stopwatch.Restart();
+            clockStopwatch.Restart();
 
-            turnElapsedSeconds += dt;
+            TurnElapsedSeconds += dt;
             if (isWhiteTurnGetter())
             {
                 WhiteSecondsLeft -= dt;
                 if (WhiteSecondsLeft <= 0)
                 {
                     WhiteSecondsLeft = 0;
-                    Stop();
                     ClockUpdated?.Invoke();
                     TimeExpired?.Invoke(true);
                     return;
@@ -69,7 +74,6 @@ namespace XadrezApp
                 if (BlackSecondsLeft <= 0)
                 {
                     BlackSecondsLeft = 0;
-                    Stop();
                     ClockUpdated?.Invoke();
                     TimeExpired?.Invoke(false);
                     return;
@@ -79,10 +83,10 @@ namespace XadrezApp
             ClockUpdated?.Invoke();
         }
 
-        public void ConfigureMode(string mode, bool resetRemainingTime = true)
+        public void ConfigureClockMode(string mode, bool resetRemainingTime = true)
         {
-            Mode = mode;
-            IsBronsteinMode = mode.StartsWith("Bronstein", StringComparison.OrdinalIgnoreCase);
+            TimeControlMode = mode;
+            IsBronsteinMode = mode.StartsWith("Bronstein");
 
             double initialSeconds = mode switch
             {
@@ -97,91 +101,93 @@ namespace XadrezApp
                 _ => 3
             };
 
+            // Só reinicia o tempo dos dois jogadores se a partida não estiver em andamento
+            // (ou se ainda não havia tempo configurado ao sair de "Sem Relógio").
             if (resetRemainingTime || WhiteSecondsLeft <= 0 || BlackSecondsLeft <= 0)
             {
                 WhiteSecondsLeft = initialSeconds;
                 BlackSecondsLeft = initialSeconds;
-                turnElapsedSeconds = 0;
-                IsRunning = false;
-                stopwatch.Reset();
+                TurnElapsedSeconds = 0;
+                ClockRunning = false;
+                clockStopwatch.Reset();
             }
             else if (mode == "Sem Relógio")
             {
-                stopwatch.Reset();
+                clockStopwatch.Reset();
             }
-            else if (IsRunning && !isPausedOrEndedGetter())
+            else if (ClockRunning && !isGameOverGetter() && !isPuzzleActiveGetter())
             {
-                stopwatch.Restart();
+                clockStopwatch.Restart();
             }
 
             ClockUpdated?.Invoke();
         }
 
-        public void Start()
+        public void ApplyClockIncrement(bool forWhite)
         {
-            if (Mode == "Sem Relógio") return;
-            IsRunning = true;
-            stopwatch.Restart();
-            ClockUpdated?.Invoke();
-        }
+            if (isPuzzleActiveGetter()) return;
 
-        public void Stop()
-        {
-            IsRunning = false;
-            turnElapsedSeconds = 0;
-            stopwatch.Reset();
-            ClockUpdated?.Invoke();
-        }
-
-        public void ApplyIncrement(bool forWhite)
-        {
-            if (IsRunning && stopwatch.IsRunning && Mode != "Sem Relógio")
+            // Desconta a fração de segundo decorrida desde o último tick antes de aplicar o bônus
+            if (ClockRunning && clockStopwatch.IsRunning && TimeControlMode != "Sem Relógio")
             {
-                double dt = stopwatch.Elapsed.TotalSeconds;
-                turnElapsedSeconds += dt;
+                double dt = clockStopwatch.Elapsed.TotalSeconds;
+                TurnElapsedSeconds += dt;
                 if (forWhite) WhiteSecondsLeft = Math.Max(0, WhiteSecondsLeft - dt);
                 else BlackSecondsLeft = Math.Max(0, BlackSecondsLeft - dt);
             }
 
-            IsRunning = true;
+            // O relógio passa a correr assim que o 1º lance é feito
+            ClockRunning = true;
 
-            if (Mode == "Sem Relógio")
+            if (TimeControlMode == "Sem Relógio")
             {
-                turnElapsedSeconds = 0;
-                stopwatch.Reset();
+                TurnElapsedSeconds = 0;
+                clockStopwatch.Reset();
                 ClockUpdated?.Invoke();
                 return;
             }
 
-            double bonus = IsBronsteinMode ? Math.Min(turnElapsedSeconds, IncrementSeconds) : IncrementSeconds;
+            double bonus = IsBronsteinMode ? Math.Min(TurnElapsedSeconds, IncrementSeconds) : IncrementSeconds;
             if (forWhite) WhiteSecondsLeft += bonus;
             else BlackSecondsLeft += bonus;
-
-            turnElapsedSeconds = 0;
-            stopwatch.Restart();
+            TurnElapsedSeconds = 0;
+            clockStopwatch.Restart();
             ClockUpdated?.Invoke();
         }
 
-        public (string whiteText, string blackText) FormatClocks(bool english, bool isPuzzleMode)
+        // Usado quando uma posição FEN é carregada com as Pretas a jogar
+        public void StartIfEnabled()
         {
-            string wLabel = english ? "White" : "Brancas";
-            string bLabel = english ? "Black" : "Pretas";
+            if (TimeControlMode != "Sem Relógio" && !isPuzzleActiveGetter())
+            {
+                ClockRunning = true;
+                clockStopwatch.Restart();
+            }
+        }
 
-            if (Mode == "Sem Relógio" || isPuzzleMode)
-                return ($"⏱ {wLabel}: --:--", $"⏱ {bLabel}: --:--");
+        public void StopAndResetStopwatch()
+        {
+            ClockRunning = false;
+            clockStopwatch.Reset();
+        }
+
+        public (string whiteText, string blackText) GetFormattedLabels()
+        {
+            if (TimeControlMode == "Sem Relógio" || isPuzzleActiveGetter())
+                return ("Brancas: --:--", "Pretas: --:--");
 
             TimeSpan w = TimeSpan.FromSeconds(Math.Ceiling(Math.Max(0, WhiteSecondsLeft)));
             TimeSpan b = TimeSpan.FromSeconds(Math.Ceiling(Math.Max(0, BlackSecondsLeft)));
-            return ($"⏱ {wLabel}: {(int)w.TotalMinutes:D2}:{w.Seconds:D2}",
-                    $"⏱ {bLabel}: {(int)b.TotalMinutes:D2}:{b.Seconds:D2}");
+            return ($"Brancas: {(int)w.TotalMinutes:D2}:{w.Seconds:D2}",
+                    $"Pretas: {(int)b.TotalMinutes:D2}:{b.Seconds:D2}");
         }
 
         public void Dispose()
         {
             try
             {
-                timer.Stop();
-                timer.Dispose();
+                clockTimer.Stop();
+                clockTimer.Dispose();
             }
             catch { }
         }

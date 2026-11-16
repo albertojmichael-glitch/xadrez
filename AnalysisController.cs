@@ -12,12 +12,29 @@ namespace XadrezApp
         string WhiteSan,
         string Badge,
         string Description,
-        Color BadgeColor,
         double EvalBefore,
         double EvalAfter,
         double Accuracy,
         string BestAlternative,
         string CoachNote);
+
+    // Dados do lance do jogador, usados para classificar a precisão depois que o bot responder
+    public sealed record PlayerMoveInfo(
+        GameSnapshot Before,
+        Point From,
+        Point To,
+        char? Promotion,
+        string San,
+        bool IsBookMove);
+
+    public sealed record TurnEvaluationSummary(
+        EngineAnalysisResult? BestWhiteBefore,
+        EngineAnalysisResult EvalAfterAnalysis,
+        EngineAnalysisResult BotAnalysis,
+        bool PlayedBest,
+        (string badge, string description, Color color) Classification,
+        string CoachNote,
+        string BestAlternativeStr);
 
     public class AnalysisController : IDisposable
     {
@@ -26,7 +43,9 @@ namespace XadrezApp
 
         public bool IsUsingStockfish => Engine.IsUsingStockfish;
 
-        public void ClearHistory() => MoveEvaluations.Clear();
+        public void StopSearch() => Engine.StopSearch();
+
+        public void ClearEvaluations() => MoveEvaluations.Clear();
 
         public void RemoveLastEvaluation()
         {
@@ -34,117 +53,151 @@ namespace XadrezApp
                 MoveEvaluations.RemoveAt(MoveEvaluations.Count - 1);
         }
 
-        public void StopSearch() => Engine.StopSearch();
-
-        public void RecordCheckmateMove(int moveNumber, string whiteSan, bool english)
+        public void RecordCheckmateMove(int moveNum, string whiteSan)
         {
-            string desc = english ? "Checkmate!" : "Xeque-Mate!";
-            string note = english ? "decisive checkmate move" : "lance decisivo de xeque-mate";
             MoveEvaluations.Add(new MoveEvaluationRecord(
-                moveNumber, whiteSan, "!", desc, Color.FromArgb(20, 150, 80), 10.0, 99.0, 100.0, "-", note));
-        }
-
-        public async Task<(EngineAnalysisResult bestBefore, EngineAnalysisResult evalAfter, EngineAnalysisResult botPlay, MoveEvaluationRecord record)>
-            EvaluatePlayerTurnAndBotReplyAsync(
-                GameSnapshot snapshotBeforeWhite,
-                ChessRules rulesAfterWhite,
-                Point playerFrom,
-                Point playerTo,
-                char? playerPromo,
-                string whiteSan,
-                bool isBookMove,
-                int moveNumber,
-                int difficultyIndex)
-        {
-            var rulesBefore = new ChessRules();
-            rulesBefore.RestoreSnapshot(snapshotBeforeWhite);
-
-            var bestWhiteBefore = await Task.Run(() => Engine.Analyze(rulesBefore, true, difficultyIndex, isHintOrEvaluationOnly: true));
-
-            var botRulesForEval = rulesAfterWhite.Clone();
-            EngineAnalysisResult evalAfterAnalysis;
-            EngineAnalysisResult botAnalysis;
-
-            if (difficultyIndex < 3)
-            {
-                evalAfterAnalysis = await Task.Run(() => Engine.Analyze(botRulesForEval, false, difficultyIndex, isHintOrEvaluationOnly: true));
-                var botPlayCopy = rulesAfterWhite.Clone();
-                botAnalysis = await Task.Run(() => Engine.Analyze(botPlayCopy, false, difficultyIndex, isHintOrEvaluationOnly: false));
-            }
-            else
-            {
-                botAnalysis = await Task.Run(() => Engine.Analyze(botRulesForEval, false, difficultyIndex, isHintOrEvaluationOnly: false));
-                evalAfterAnalysis = botAnalysis;
-            }
-
-            bool samePromo = bestWhiteBefore.Promotion == null ||
-                             playerPromo == null ||
-                             char.ToUpper(bestWhiteBefore.Promotion.Value) == char.ToUpper(playerPromo.Value);
-
-            bool playedBest = bestWhiteBefore.BestMove.HasValue &&
-                              bestWhiteBefore.BestMove.Value.from == playerFrom &&
-                              bestWhiteBefore.BestMove.Value.to == playerTo &&
-                              samePromo;
-
-            bool isTactical = whiteSan.Contains('x') || whiteSan.Contains('+');
-            var classification = EngineService.ClassifyMove(
-                bestWhiteBefore.EvalWhitePawns,
-                evalAfterAnalysis.EvalWhitePawns,
-                playedBest,
-                isBookMove,
-                isTactical);
-
-            double moveAcc = EngineService.ComputeMoveAccuracy(
-                bestWhiteBefore.EvalWhitePawns,
-                evalAfterAnalysis.EvalWhitePawns,
-                playedBest,
-                isBookMove);
-
-            string bestAlternativeStr = bestWhiteBefore.BestMove.HasValue
-                ? EngineService.FormatMoveUciOrAlg(bestWhiteBefore.BestMove.Value.from, bestWhiteBefore.BestMove.Value.to, bestWhiteBefore.Promotion)
-                : "-";
-
-            string coachNote = EngineService.ExplainMoveCoach(
-                rulesBefore,
-                playerFrom,
-                playerTo,
-                playerPromo,
-                bestWhiteBefore,
-                evalAfterAnalysis,
-                playedBest,
-                isBookMove);
-
-            var record = new MoveEvaluationRecord(
-                moveNumber,
+                moveNum,
                 whiteSan,
-                classification.badge,
-                classification.description,
-                classification.color,
-                bestWhiteBefore.EvalWhitePawns,
-                evalAfterAnalysis.EvalWhitePawns,
-                moveAcc,
-                bestAlternativeStr,
-                coachNote);
-
-            MoveEvaluations.Add(record);
-            return (bestWhiteBefore, evalAfterAnalysis, botAnalysis, record);
-        }
-
-        public Task<EngineAnalysisResult> AnalyzePositionAsync(ChessRules rules, bool forWhite, int difficultyIndex, bool isHintOrEvalOnly)
-        {
-            var clone = rules.Clone();
-            return Task.Run(() => Engine.Analyze(clone, forWhite, difficultyIndex, isHintOrEvalOnly));
+                "!",
+                "Xeque-Mate!",
+                10.0,
+                99.0,
+                100.0,
+                "-",
+                "lance decisivo de xeque-mate"));
         }
 
         public double GetAverageAccuracy() =>
             MoveEvaluations.Count > 0 ? MoveEvaluations.Average(m => m.Accuracy) : 100.0;
 
-        public string BuildGameAccuracySummaryText(IReadOnlyList<string> sanMoves, bool english)
+        // Executa todas as etapas de análise do turno (antes do lance das Brancas, avaliação pós-lance em força máxima
+        // e escolha do lance do Bot na dificuldade selecionada), conferindo isCancelled() após cada await!
+        public async Task<TurnEvaluationSummary?> EvaluateTurnAndChooseBotMoveAsync(
+            ChessRules currentRules,
+            PlayerMoveInfo? playerMove,
+            int moveNumber,
+            int diffIdx,
+            Func<bool> isCancelled)
+        {
+            // 1. Avalia qual era o melhor lance das Brancas ANTES da sua jogada (sempre em força máxima)
+            EngineAnalysisResult? bestWhiteBefore = null;
+            ChessRules? rulesBefore = null;
+            if (playerMove != null)
+            {
+                rulesBefore = new ChessRules();
+                rulesBefore.RestoreSnapshot(playerMove.Before);
+                bestWhiteBefore = await Task.Run(() => Engine.Analyze(rulesBefore, true, diffIdx, isHintOrEvaluationOnly: true));
+                if (isCancelled()) return null;
+            }
+
+            // 2. Avalia a posição DEPOIS da sua jogada em FORÇA MÁXIMA (isHintOrEvaluationOnly: true)
+            //    para classificar o lance das Brancas sem a distorção do bot enfraquecido (Fácil/Médio).
+            var botRules = currentRules.Clone();
+            EngineAnalysisResult evalAfterAnalysis;
+            EngineAnalysisResult botAnalysis;
+
+            if (playerMove != null && diffIdx < 3)
+            {
+                evalAfterAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: true));
+                if (isCancelled()) return null;
+
+                var botPlayCopy = currentRules.Clone();
+                botAnalysis = await Task.Run(() => Engine.Analyze(botPlayCopy, false, diffIdx, isHintOrEvaluationOnly: false));
+                if (isCancelled()) return null;
+            }
+            else
+            {
+                botAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: false));
+                if (isCancelled()) return null;
+                evalAfterAnalysis = botAnalysis;
+            }
+
+            bool samePromo = bestWhiteBefore?.Promotion == null ||
+                             playerMove?.Promotion == null ||
+                             char.ToUpper(bestWhiteBefore.Promotion.Value) == char.ToUpper(playerMove.Promotion.Value);
+
+            bool playedBest = playerMove != null &&
+                              bestWhiteBefore?.BestMove != null &&
+                              bestWhiteBefore.BestMove.Value.from == playerMove.From &&
+                              bestWhiteBefore.BestMove.Value.to == playerMove.To &&
+                              samePromo;
+
+            (string badge, string description, Color color) classification = ("", "", Color.Black);
+            string coachNote = "";
+            string bestAlternativeStr = "-";
+
+            if (playerMove != null && bestWhiteBefore != null && rulesBefore != null)
+            {
+                bool isTactical = playerMove.San.Contains('x') || playerMove.San.Contains('+');
+                classification = EngineService.ClassifyMove(
+                    bestWhiteBefore.EvalWhitePawns,
+                    evalAfterAnalysis.EvalWhitePawns,
+                    playedBest,
+                    playerMove.IsBookMove,
+                    isTactical);
+
+                double moveAcc = EngineService.ComputeMoveAccuracy(
+                    bestWhiteBefore.EvalWhitePawns,
+                    evalAfterAnalysis.EvalWhitePawns,
+                    playedBest,
+                    playerMove.IsBookMove);
+
+                if (bestWhiteBefore.BestMove.HasValue)
+                {
+                    bestAlternativeStr = EngineService.FormatMoveUciOrAlg(
+                        bestWhiteBefore.BestMove.Value.from,
+                        bestWhiteBefore.BestMove.Value.to,
+                        bestWhiteBefore.Promotion);
+                }
+
+                coachNote = EngineService.ExplainMoveCoach(
+                    rulesBefore,
+                    playerMove.From,
+                    playerMove.To,
+                    playerMove.Promotion,
+                    bestWhiteBefore,
+                    evalAfterAnalysis,
+                    playedBest,
+                    playerMove.IsBookMove);
+
+                MoveEvaluations.Add(new MoveEvaluationRecord(
+                    moveNumber,
+                    playerMove.San,
+                    classification.badge,
+                    classification.description,
+                    bestWhiteBefore.EvalWhitePawns,
+                    evalAfterAnalysis.EvalWhitePawns,
+                    moveAcc,
+                    bestAlternativeStr,
+                    coachNote));
+            }
+
+            return new TurnEvaluationSummary(
+                bestWhiteBefore,
+                evalAfterAnalysis,
+                botAnalysis,
+                playedBest,
+                classification,
+                coachNote,
+                bestAlternativeStr);
+        }
+
+        public Task<EngineAnalysisResult> AnalyzePositionOrHintAsync(ChessRules analysisRules, bool sideToMove)
+        {
+            return Task.Run(() => Engine.Analyze(analysisRules, sideToMove, 3, isHintOrEvaluationOnly: true));
+        }
+
+        public string BuildPositionReport(ChessRules analysisRules, EngineAnalysisResult res)
+        {
+            return EngineService.BuildPositionReport(analysisRules, res);
+        }
+
+        public string BuildGameAccuracySummaryText(List<string> sanMoves)
         {
             if (MoveEvaluations.Count == 0)
-                return english ? "No moves evaluated in this game yet." : "Ainda não há lances avaliados nesta partida.";
+                return "Ainda não há lances avaliados nesta partida.";
 
-            double avgAcc = GetAverageAccuracy();
+            double avgAcc = MoveEvaluations.Average(m => m.Accuracy);
             int brilliant = MoveEvaluations.Count(m => m.Badge == "!!");
             int best = MoveEvaluations.Count(m => m.Badge == "!");
             int book = MoveEvaluations.Count(m => m.Badge == "📖");
@@ -157,42 +210,26 @@ namespace XadrezApp
             double worstDrop = worst.EvalAfter - worst.EvalBefore;
 
             var sb = new StringBuilder();
-            if (english)
-            {
-                sb.AppendLine("=== AI GAME ACCURACY REPORT ===");
-                sb.AppendLine($"White Average Accuracy: {avgAcc:0.1}% ({MoveEvaluations.Count} moves analyzed)");
-                sb.AppendLine($"Opening played: {StudyLibrary.DetectOpening(sanMoves.ToList())}");
-                sb.AppendLine();
-                sb.AppendLine($"• Brilliant (!!): {brilliant}   |   Best Moves (!): {best}   |   Book (📖): {book}");
-                sb.AppendLine($"• Good Moves: {good}        |   Inaccuracies (?!): {inaccuracies}");
-                sb.AppendLine($"• Mistakes (?): {mistakes}           |   Blunders (??): {blunders}");
-                if (worstDrop < -0.45)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine($"Critical moment: Move {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
-                    sb.AppendLine($"AI Recommendation: {worst.BestAlternative}.");
-                }
-            }
-            else
-            {
-                sb.AppendLine("=== RELATÓRIO DE ANÁLISE DA PARTIDA (IA) ===");
-                sb.AppendLine($"Precisão Média das Brancas: {avgAcc:0.1}% ({MoveEvaluations.Count} lances analisados)");
-                sb.AppendLine($"Abertura jogada: {StudyLibrary.DetectOpening(sanMoves.ToList())}");
-                sb.AppendLine();
-                sb.AppendLine($"• Brilhantes (!!): {brilliant}   |   Melhores Lances (!): {best}   |   Teóricos (📖): {book}");
-                sb.AppendLine($"• Lances Bons: {good}        |   Imprecisões (?!): {inaccuracies}");
-                sb.AppendLine($"• Erros (?): {mistakes}           |   Capivaradas (??): {blunders}");
-                if (worstDrop < -0.45)
-                {
-                    sb.AppendLine();
-                    sb.AppendLine($"Momento crítico: Lance {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
-                    sb.AppendLine($"Recomendação da IA naquele momento: {worst.BestAlternative}.");
-                }
-            }
+            sb.AppendLine($"=== RELATÓRIO DE ANÁLISE DA PARTIDA (IA) ===");
+            sb.AppendLine($"Precisão Média das Brancas: {avgAcc:0.1}% ({MoveEvaluations.Count} lances analisados)");
+            sb.AppendLine($"Abertura jogada: {StudyLibrary.DetectOpening(sanMoves)}");
+            sb.AppendLine();
+            sb.AppendLine($"• Brilhantes (!!): {brilliant}   |   Melhores Lances (!): {best}   |   Teóricos (📖): {book}");
+            sb.AppendLine($"• Lances Bons: {good}        |   Imprecisões (?!): {inaccuracies}");
+            sb.AppendLine($"• Erros (?): {mistakes}           |   Capivaradas (??): {blunders}");
 
+            if (worstDrop < -0.45)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"Momento crítico: Lance {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
+                sb.AppendLine($"Recomendação da IA naquele momento: {worst.BestAlternative}.");
+            }
             return sb.ToString().TrimEnd();
         }
 
-        public void Dispose() => Engine.Dispose();
+        public void Dispose()
+        {
+            try { Engine.Dispose(); } catch { }
+        }
     }
 }
