@@ -23,40 +23,51 @@ namespace XadrezApp
         }
     }
 
-    // Janela Clássica para escolha de peça na Promoção do Peão
+    // Janela Clássica para escolha de peça na Promoção do Peão com suporte a PT/EN, Tema Escuro e Acessibilidade
     public static class PromotionDialog
     {
-        public static char AskPiece(bool isWhite, IWin32Window? owner = null)
+        public static char AskPiece(bool isWhite, IWin32Window? owner = null, bool english = false, bool darkMode = false)
         {
             using var form = new Form
             {
-                Text = "Promoção de Peão",
-                ClientSize = new Size(340, 110),
+                Text = english ? "★ Pawn Promotion" : "★ Promoção de Peão",
+                ClientSize = new Size(360, 118),
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen,
                 MaximizeBox = false,
                 MinimizeBox = false,
                 ControlBox = false,
-                BackColor = Color.FromArgb(236, 233, 216),
+                BackColor = darkMode ? Color.FromArgb(36, 38, 46) : Color.FromArgb(236, 233, 216),
+                ForeColor = darkMode ? Color.White : Color.Black,
                 Font = new Font("Tahoma", 8.5f, FontStyle.Bold)
             };
 
             var lbl = new Label
             {
-                Text = "Escolha a peça para promover o seu peão:",
-                Location = new Point(15, 12),
+                Text = english
+                    ? "👑 Choose the piece to promote your pawn:"
+                    : "👑 Escolha a peça para promover o seu peão:",
+                Location = new Point(14, 12),
                 AutoSize = true
             };
             form.Controls.Add(lbl);
 
             char selected = 'Q';
-            (string label, char code)[] options =
-            {
-                ("Rainha (Q)", 'Q'),
-                ("Torre (R)", 'R'),
-                ("Bispo (B)", 'B'),
-                ("Cavalo (N)", 'N')
-            };
+            (string label, char code)[] options = english
+                ? new[]
+                {
+                    ("♛ Queen (Q)", 'Q'),
+                    ("♜ Rook (R)", 'R'),
+                    ("♝ Bishop (B)", 'B'),
+                    ("♞ Knight (N)", 'N')
+                }
+                : new[]
+                {
+                    ("♛ Rainha (Q)", 'Q'),
+                    ("♜ Torre (R)", 'R'),
+                    ("♝ Bispo (B)", 'B'),
+                    ("♞ Cavalo (N)", 'N')
+                };
 
             int x = 12;
             foreach (var opt in options)
@@ -65,9 +76,11 @@ namespace XadrezApp
                 {
                     Text = opt.label,
                     Location = new Point(x, 42),
-                    Size = new Size(76, 45),
+                    Size = new Size(80, 50),
                     FlatStyle = FlatStyle.System,
-                    Cursor = Cursors.Hand
+                    Cursor = Cursors.Hand,
+                    AccessibleName = opt.label,
+                    AccessibleDescription = opt.label
                 };
                 char c = opt.code;
                 btn.Click += (s, e) =>
@@ -77,7 +90,7 @@ namespace XadrezApp
                     form.Close();
                 };
                 form.Controls.Add(btn);
-                x += 80;
+                x += 84;
             }
 
             if (owner != null)

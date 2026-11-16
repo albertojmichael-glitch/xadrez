@@ -18,7 +18,6 @@ namespace XadrezApp
         string BestAlternative,
         string CoachNote);
 
-    // Dados do lance do jogador, usados para classificar a precisão depois que o bot responder
     public sealed record PlayerMoveInfo(
         GameSnapshot Before,
         Point From,
@@ -53,25 +52,23 @@ namespace XadrezApp
                 MoveEvaluations.RemoveAt(MoveEvaluations.Count - 1);
         }
 
-        public void RecordCheckmateMove(int moveNum, string whiteSan)
+        public void RecordCheckmateMove(int moveNum, string whiteSan, bool english = false)
         {
             MoveEvaluations.Add(new MoveEvaluationRecord(
                 moveNum,
                 whiteSan,
                 "!",
-                "Xeque-Mate!",
+                english ? "Checkmate!" : "Xeque-Mate!",
                 10.0,
                 99.0,
                 100.0,
                 "-",
-                "lance decisivo de xeque-mate"));
+                english ? "decisive checkmate move" : "lance decisivo de xeque-mate"));
         }
 
         public double GetAverageAccuracy() =>
             MoveEvaluations.Count > 0 ? MoveEvaluations.Average(m => m.Accuracy) : 100.0;
 
-        // Executa todas as etapas de análise do turno (antes do lance das Brancas, avaliação pós-lance em força máxima
-        // e escolha do lance do Bot na dificuldade selecionada), conferindo isCancelled() após cada await!
         public async Task<TurnEvaluationSummary?> EvaluateTurnAndChooseBotMoveAsync(
             ChessRules currentRules,
             PlayerMoveInfo? playerMove,
@@ -79,7 +76,6 @@ namespace XadrezApp
             int diffIdx,
             Func<bool> isCancelled)
         {
-            // 1. Avalia qual era o melhor lance das Brancas ANTES da sua jogada (sempre em força máxima)
             EngineAnalysisResult? bestWhiteBefore = null;
             ChessRules? rulesBefore = null;
             if (playerMove != null)
@@ -90,8 +86,6 @@ namespace XadrezApp
                 if (isCancelled()) return null;
             }
 
-            // 2. Avalia a posição DEPOIS da sua jogada em FORÇA MÁXIMA (isHintOrEvaluationOnly: true)
-            //    para classificar o lance das Brancas sem a distorção do bot enfraquecido (Fácil/Médio).
             var botRules = currentRules.Clone();
             EngineAnalysisResult evalAfterAnalysis;
             EngineAnalysisResult botAnalysis;
@@ -192,10 +186,10 @@ namespace XadrezApp
             return EngineService.BuildPositionReport(analysisRules, res);
         }
 
-        public string BuildGameAccuracySummaryText(List<string> sanMoves)
+        public string BuildGameAccuracySummaryText(List<string> sanMoves, bool english = false)
         {
             if (MoveEvaluations.Count == 0)
-                return "Ainda não há lances avaliados nesta partida.";
+                return english ? "No moves evaluated in this game yet." : "Ainda não há lances avaliados nesta partida.";
 
             double avgAcc = MoveEvaluations.Average(m => m.Accuracy);
             int brilliant = MoveEvaluations.Count(m => m.Badge == "!!");
@@ -210,19 +204,39 @@ namespace XadrezApp
             double worstDrop = worst.EvalAfter - worst.EvalBefore;
 
             var sb = new StringBuilder();
-            sb.AppendLine($"=== RELATÓRIO DE ANÁLISE DA PARTIDA (IA) ===");
-            sb.AppendLine($"Precisão Média das Brancas: {avgAcc:0.1}% ({MoveEvaluations.Count} lances analisados)");
-            sb.AppendLine($"Abertura jogada: {StudyLibrary.DetectOpening(sanMoves)}");
-            sb.AppendLine();
-            sb.AppendLine($"• Brilhantes (!!): {brilliant}   |   Melhores Lances (!): {best}   |   Teóricos (📖): {book}");
-            sb.AppendLine($"• Lances Bons: {good}        |   Imprecisões (?!): {inaccuracies}");
-            sb.AppendLine($"• Erros (?): {mistakes}           |   Capivaradas (??): {blunders}");
-
-            if (worstDrop < -0.45)
+            if (english)
             {
+                sb.AppendLine("=== AI GAME ANALYSIS REPORT ===");
+                sb.AppendLine($"White Average Accuracy: {avgAcc:0.1}% ({MoveEvaluations.Count} moves analyzed)");
+                sb.AppendLine($"Opening played: {StudyLibrary.DetectOpening(sanMoves)}");
                 sb.AppendLine();
-                sb.AppendLine($"Momento crítico: Lance {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
-                sb.AppendLine($"Recomendação da IA naquele momento: {worst.BestAlternative}.");
+                sb.AppendLine($"• Brilliant (!!): {brilliant}   |   Best Moves (!): {best}   |   Book (📖): {book}");
+                sb.AppendLine($"• Good Moves: {good}        |   Inaccuracies (?!): {inaccuracies}");
+                sb.AppendLine($"• Mistakes (?): {mistakes}           |   Blunders (??): {blunders}");
+
+                if (worstDrop < -0.45)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"Critical moment: Move {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
+                    sb.AppendLine($"AI Recommendation at that moment: {worst.BestAlternative}.");
+                }
+            }
+            else
+            {
+                sb.AppendLine($"=== RELATÓRIO DE ANÁLISE DA PARTIDA (IA) ===");
+                sb.AppendLine($"Precisão Média das Brancas: {avgAcc:0.1}% ({MoveEvaluations.Count} lances analisados)");
+                sb.AppendLine($"Abertura jogada: {StudyLibrary.DetectOpening(sanMoves)}");
+                sb.AppendLine();
+                sb.AppendLine($"• Brilhantes (!!): {brilliant}   |   Melhores Lances (!): {best}   |   Teóricos (📖): {book}");
+                sb.AppendLine($"• Lances Bons: {good}        |   Imprecisões (?!): {inaccuracies}");
+                sb.AppendLine($"• Erros (?): {mistakes}           |   Capivaradas (??): {blunders}");
+
+                if (worstDrop < -0.45)
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"Momento crítico: Lance {worst.MoveNumber}. {worst.WhiteSan} ({worst.Description}) — {worst.CoachNote}.");
+                    sb.AppendLine($"Recomendação da IA naquele momento: {worst.BestAlternative}.");
+                }
             }
             return sb.ToString().TrimEnd();
         }
