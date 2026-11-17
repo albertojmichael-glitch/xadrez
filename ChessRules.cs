@@ -843,20 +843,27 @@ namespace XadrezApp
         }
 
         // Gera arquivo PGN completo da partida para salvar ou copiar (com SetUp/FEN, resultado real e engine ativa)
-        public string ToPgn(string? result = null, string? blackPlayerName = null, string? eventName = null, string? whitePlayerName = null)
+        public string ToPgn(string? result = null, string? blackPlayerName = null, string? eventName = null,
+            string? whitePlayerName = null, DateTimeOffset? playedAt = null, IReadOnlyDictionary<int, string>? comments = null)
         {
             string finalResult = string.IsNullOrWhiteSpace(result) ? GameResult : result!;
             string whiteName = string.IsNullOrWhiteSpace(whitePlayerName) ? "Jogador" : whitePlayerName!;
             string opponent = string.IsNullOrWhiteSpace(blackPlayerName) ? "Engine Tática Interna" : blackPlayerName!;
             string ev = string.IsNullOrWhiteSpace(eventName) ? $"Partida Clássica vs {opponent}" : eventName!;
 
+            static string EscapeTag(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                .Replace('\r', ' ').Replace('\n', ' ');
             var sb = new StringBuilder();
-            sb.AppendLine($"[Event \"{ev}\"]");
-            sb.AppendLine($"[Site \"Xadrez Desktop C#\"]");
-            sb.AppendLine($"[Date \"{DateTime.Now:yyyy.MM.dd}\"]");
-            sb.AppendLine($"[White \"{whiteName}\"]");
-            sb.AppendLine($"[Black \"{opponent}\"]");
+            var date = playedAt ?? DateTimeOffset.Now;
+            sb.AppendLine($"[Event \"{EscapeTag(ev)}\"]");
+            sb.AppendLine("[Site \"Xadrez Desktop C#\"]");
+            sb.AppendLine(FormattableString.Invariant($"[Date \"{date:yyyy.MM.dd}\"]"));
+            sb.AppendLine("[Round \"?\"]");
+            sb.AppendLine($"[White \"{EscapeTag(whiteName)}\"]");
+            sb.AppendLine($"[Black \"{EscapeTag(opponent)}\"]");
             sb.AppendLine($"[Result \"{finalResult}\"]");
+            if (playedAt.HasValue)
+                sb.AppendLine(FormattableString.Invariant($"[Time \"{date:HH:mm:ss}\"]"));
             if (InitialFen != StandardStartFen)
             {
                 sb.AppendLine("[SetUp \"1\"]");
@@ -881,6 +888,8 @@ namespace XadrezApp
                         sb.Append($"{SanMoves[i]} ");
                     moveNo++;
                 }
+                if (comments != null && comments.TryGetValue(i, out string? comment))
+                    sb.Append("{ ").Append(comment.Replace('{', '(').Replace('}', ')').Replace('\r', ' ').Replace('\n', ' ')).Append(" } ");
                 whiteToPlay = !whiteToPlay;
             }
             sb.Append(finalResult);
@@ -1007,7 +1016,7 @@ namespace XadrezApp
             {
                 var lines = pgnText.Replace("\r\n", "\n").Split('\n');
                 var moveTextBuilder = new StringBuilder();
-                var tagRegex = new Regex(@"^\s*\[\s*([A-Za-z0-9_]+)\s+""([^""]*)""\s*\]\s*$");
+                var tagRegex = new Regex(@"^\s*\[\s*([A-Za-z0-9_]+)\s+""((?:\\[""\\]|[^""\\])*)""\s*\]\s*$");
 
                 foreach (string rawLine in lines)
                 {
@@ -1018,14 +1027,11 @@ namespace XadrezApp
                     var match = tagRegex.Match(line);
                     if (match.Success)
                     {
-                        headers[match.Groups[1].Value] = match.Groups[2].Value;
+                        headers[match.Groups[1].Value] = Regex.Replace(match.Groups[2].Value, @"\\([""\\])", "$1");
                     }
                     else
                     {
-                        int semiIdx = line.IndexOf(';');
-                        if (semiIdx >= 0)
-                            line = line[..semiIdx];
-                        moveTextBuilder.Append(line).Append(' ');
+                        moveTextBuilder.AppendLine(line);
                     }
                 }
 
@@ -1053,6 +1059,7 @@ namespace XadrezApp
                     if (tok is "1-0" or "0-1" or "1/2-1/2" or "*")
                     {
                         probe.GameResult = tok;
+                        plySnapshots[^1].GameResult = tok;
                         break;
                     }
 
@@ -1104,21 +1111,35 @@ namespace XadrezApp
             var sb = new StringBuilder(text.Length);
             int braceDepth = 0;
             int parenDepth = 0;
+            bool lineComment = false;
 
             foreach (char ch in text)
             {
+                if (lineComment)
+                {
+                    if (ch == '\n') lineComment = false;
+                    continue;
+                }
                 if (braceDepth > 0)
                 {
                     if (ch == '}') braceDepth--;
                     continue;
                 }
+                if (ch == ';')
+                {
+                    lineComment = true;
+                    if (parenDepth == 0) sb.Append(' ');
+                    continue;
+                }
                 if (ch == '{')
                 {
+                    if (parenDepth == 0) sb.Append(' ');
                     braceDepth++;
                     continue;
                 }
                 if (ch == '(')
                 {
+                    if (parenDepth == 0) sb.Append(' ');
                     parenDepth++;
                     continue;
                 }

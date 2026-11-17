@@ -29,14 +29,15 @@ namespace XadrezApp
     public class EngineService : IDisposable
     {
         private Process? stockfishProcess;
-        private bool disposed = false;
+        private volatile bool disposed;
+        private bool stockfishUnavailable;
 
         private static Random rng => Random.Shared;
 
         private readonly SemaphoreSlim stockfishLock = new SemaphoreSlim(1, 1);
         private readonly object stdinLock = new object();
 
-        public bool IsUsingStockfish => stockfishProcess != null && !stockfishProcess.HasExited;
+        public bool IsUsingStockfish => Volatile.Read(ref stockfishProcess) != null;
 
         private readonly record struct SearchMove(Point From, Point To, char? Promotion = null);
 
@@ -109,12 +110,7 @@ namespace XadrezApp
             {-50,-35,-25,-15,-15,-25,-35,-50 }
         };
 
-        public EngineService()
-        {
-            InitStockfish();
-        }
-
-        private void InitStockfish()
+        private void InitStockfish(CancellationToken cancellationToken)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string[] candidates =
@@ -124,7 +120,11 @@ namespace XadrezApp
             };
 
             string? exePath = candidates.FirstOrDefault(File.Exists);
-            if (exePath == null) return;
+            if (exePath == null)
+            {
+                stockfishUnavailable = true;
+                return;
+            }
 
             try
             {
@@ -140,12 +140,14 @@ namespace XadrezApp
                     }
                 };
                 stockfishProcess.Start();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(4));
                 stockfishProcess.StandardInput.WriteLine("uci");
                 stockfishProcess.StandardInput.Flush();
 
                 bool uciOk = false;
                 string? line;
-                while ((line = stockfishProcess.StandardOutput.ReadLine()) != null)
+                while ((line = ReadEngineLine(stockfishProcess.StandardOutput, timeout.Token)) != null)
                 {
                     if (line.Trim() == "uciok")
                     {
@@ -156,6 +158,7 @@ namespace XadrezApp
 
                 if (!uciOk)
                 {
+                    stockfishUnavailable = true;
                     ShutdownStockfishProcess();
                     return;
                 }
@@ -164,7 +167,7 @@ namespace XadrezApp
                 stockfishProcess.StandardInput.Flush();
 
                 bool readyOk = false;
-                while ((line = stockfishProcess.StandardOutput.ReadLine()) != null)
+                while ((line = ReadEngineLine(stockfishProcess.StandardOutput, timeout.Token)) != null)
                 {
                     if (line.Trim() == "readyok")
                     {
@@ -175,14 +178,20 @@ namespace XadrezApp
 
                 if (!readyOk)
                 {
+                    stockfishUnavailable = true;
                     ShutdownStockfishProcess();
                 }
             }
             catch
             {
                 ShutdownStockfishProcess();
+                cancellationToken.ThrowIfCancellationRequested();
+                stockfishUnavailable = true;
             }
         }
+
+        private static string? ReadEngineLine(StreamReader reader, CancellationToken token) =>
+            reader.ReadLineAsync().WaitAsync(token).GetAwaiter().GetResult();
 
         private void ShutdownStockfishProcess()
         {
@@ -218,18 +227,12 @@ namespace XadrezApp
         {
             if (disposed) return;
             disposed = true;
-            ShutdownStockfishProcess();
-            GC.SuppressFinalize(this);
-        }
-
-        public void StopSearch()
-        {
-            try
+            if (stockfishLock.Wait(0))
             {
-                lock (stdinLock)
-                    stockfishProcess?.StandardInput.WriteLine("stop");
+                try { ShutdownStockfishProcess(); }
+                finally { stockfishLock.Release(); }
             }
-            catch { }
+            GC.SuppressFinalize(this);
         }
 
         public static (string badge, string description, Color color) ClassifyMove(
@@ -237,9 +240,14 @@ namespace XadrezApp
             double evalAfterWhite,
             bool playedEngineBestMove,
             bool isBookMove = false,
-            bool isSacrificeOrTactical = false)
+            bool isSacrificeOrTactical = false,
+            int? mateInMoves = null,
+            bool? isImmediateCheckmate = null)
         {
-            if (evalAfterWhite >= 90.0)
+            if (mateInMoves > 0 && isImmediateCheckmate != true)
+                return ("!", $"Mate em {mateInMoves}", Color.FromArgb(20, 150, 80));
+
+            if (isImmediateCheckmate ?? (evalAfterWhite >= 90.0))
                 return ("!", "Xeque-Mate!", Color.FromArgb(20, 150, 80));
 
             if (isBookMove && evalAfterWhite - evalBeforeWhite >= -0.25)
@@ -250,7 +258,7 @@ namespace XadrezApp
             double winAfter = EvalToWinProbability(evalAfterWhite);
             double winDrop = Math.Max(0.0, winBefore - winAfter);
 
-            if (playedEngineBestMove && (isSacrificeOrTactical || (delta >= 0.35 && evalAfterWhite >= 1.20)))
+            if (playedEngineBestMove && isSacrificeOrTactical && evalBeforeWhite < 3.0 && delta >= -0.25)
                 return ("!!", "Brilhante!", Color.FromArgb(15, 150, 165));
             if (playedEngineBestMove || (delta >= -0.15 && winDrop <= 0.025))
                 return ("!", "Melhor Lance", Color.FromArgb(25, 140, 35));
@@ -270,8 +278,14 @@ namespace XadrezApp
             return 1.0 / (1.0 + Math.Exp(-0.40 * clamped));
         }
 
-        public static double ComputeMoveAccuracy(double evalBeforeWhite, double evalAfterWhite, bool playedBest, bool isBookMove = false)
+        public static double ComputeMoveAccuracy(double evalBeforeWhite, double evalAfterWhite, bool playedBest, bool isBookMove = false, bool forWhite = true)
         {
+            if (!forWhite)
+            {
+                evalBeforeWhite = -evalBeforeWhite;
+                evalAfterWhite = -evalAfterWhite;
+            }
+
             if (playedBest || isBookMove || evalAfterWhite >= evalBeforeWhite)
                 return 100.0;
 
@@ -282,6 +296,27 @@ namespace XadrezApp
             double acc = 103.1668 * Math.Exp(-0.04354 * winDiff) - 3.1669;
             return Math.Clamp(acc, 0.0, 100.0);
         }
+
+        public static bool IsMaterialSacrifice(ChessRules rules, Point from, Point to, char? promotion,
+            double evalBeforeWhite, double evalAfterWhite)
+        {
+            char piece = rules.Board[from.Y, from.X];
+            bool white = char.IsUpper(piece);
+            int offered = ExchangeValue(piece);
+            if (offered <= 1 || offered <= ExchangeValue(rules.Board[to.Y, to.X]) ||
+                (white ? 1 : -1) * (evalAfterWhite - evalBeforeWhite) < -0.25 ||
+                !rules.GetLegalMovesForSquare(from.X, from.Y, white).Contains(to))
+                return false;
+
+            var after = rules.Clone();
+            after.ExecuteMove(from, to, promotion);
+            return after.GetAllLegalMoves(!white).Any(move => move.to == to);
+        }
+
+        private static int ExchangeValue(char piece) => char.ToUpperInvariant(piece) switch
+        {
+            'P' => 1, 'N' or 'B' => 3, 'R' => 5, 'Q' => 9, _ => 0
+        };
 
         // Detector de Padrões Táticos: Garfo (Fork), Cravada (Pin), Espeto (Skewer) e Ataque Descoberto (Discovered Attack)
         public static List<string> DetectTacticalPatterns(ChessRules rulesBefore, Point from, Point to, char? promo = null, bool english = false)
@@ -541,27 +576,32 @@ namespace XadrezApp
 
         // Analisa a posição com dificuldade bem diferenciada:
         // 0 = Iniciante (~800 Elo), 1 = Amador (~1250 Elo), 2 = Clube (~1750 Elo), 3 = Mestre (~2400+ Elo)
-        public EngineAnalysisResult Analyze(ChessRules rules, bool forWhite, int difficultyLevel, bool isHintOrEvaluationOnly = false)
+        public EngineAnalysisResult Analyze(ChessRules rules, bool forWhite, int difficultyLevel,
+            bool isHintOrEvaluationOnly = false, CancellationToken cancellationToken = default)
         {
             int skill = isHintOrEvaluationOnly ? 20 : difficultyLevel switch { 0 => 0, 1 => 5, 2 => 12, _ => 20 };
             int sfDepth = isHintOrEvaluationOnly ? 13 : difficultyLevel switch { 0 => 2, 1 => 5, 2 => 10, _ => 15 };
 
-            if (IsUsingStockfish)
-            {
-                var sfRes = QueryStockfish(rules, forWhite, skill, sfDepth, difficultyLevel, isHintOrEvaluationOnly);
-                if (sfRes != null) return sfRes;
-            }
-
-            return QueryInternalEngine(rules, forWhite, difficultyLevel, isHintOrEvaluationOnly);
+            cancellationToken.ThrowIfCancellationRequested();
+            var stockfish = QueryStockfish(rules, forWhite, skill, sfDepth, difficultyLevel, isHintOrEvaluationOnly, cancellationToken);
+            return stockfish ?? QueryInternalEngine(rules, forWhite, difficultyLevel, isHintOrEvaluationOnly, cancellationToken);
         }
 
-        private EngineAnalysisResult? QueryStockfish(ChessRules rules, bool forWhite, int skill, int depth, int difficultyLevel, bool isHintOrEvaluationOnly)
+        private EngineAnalysisResult? QueryStockfish(ChessRules rules, bool forWhite, int skill, int depth,
+            int difficultyLevel, bool isHintOrEvaluationOnly, CancellationToken cancellationToken)
         {
-            stockfishLock.Wait();
+            stockfishLock.Wait(cancellationToken);
             try
             {
+                ObjectDisposedException.ThrowIf(disposed, this);
+                if (stockfishUnavailable) return null;
+                if (stockfishProcess == null) InitStockfish(cancellationToken);
+                if (stockfishProcess == null) return null;
+
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(15));
                 string fen = rules.ToFen();
-                var sw = stockfishProcess!.StandardInput;
+                var sw = stockfishProcess.StandardInput;
                 var sr = stockfishProcess.StandardOutput;
 
                 bool limitStrength = !isHintOrEvaluationOnly && difficultyLevel < 3;
@@ -588,7 +628,7 @@ namespace XadrezApp
                     }
                     sw.WriteLine($"setoption name Skill Level value {skill}");
                     sw.WriteLine($"position fen {fen}");
-                    sw.WriteLine($"go depth {depth}");
+                    sw.WriteLine($"go depth {depth} movetime {(isHintOrEvaluationOnly ? 2000 : 2800)}");
                 }
 
                 string lastInfoLine = "";
@@ -596,7 +636,7 @@ namespace XadrezApp
                 var multiPvData = new Dictionary<int, (string firstMove, double whitePawns, string evalStr, string pvLine)>();
                 string? line;
 
-                while ((line = sr.ReadLine()) != null)
+                while ((line = ReadEngineLine(sr, timeout.Token)) != null)
                 {
                     if (line.StartsWith("info") && line.Contains(" pv "))
                     {
@@ -682,7 +722,7 @@ namespace XadrezApp
                                 double humanChance = difficultyLevel == 0 ? 0.75 : 0.40;
                                 if (rng.NextDouble() < humanChance)
                                 {
-                                    var humanFallback = QueryInternalEngine(rules, forWhite, difficultyLevel, false);
+                                    var humanFallback = QueryInternalEngine(rules, forWhite, difficultyLevel, false, cancellationToken);
                                     if (humanFallback.BestMove.HasValue)
                                     {
                                         chosenMove = humanFallback.BestMove.Value;
@@ -714,10 +754,26 @@ namespace XadrezApp
                     }
                 }
             }
-            catch { }
+            catch (Exception) when (cancellationToken.IsCancellationRequested)
+            {
+                ShutdownStockfishProcess();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (Exception ex) when (!disposed && ex is IOException or InvalidOperationException or OperationCanceledException)
+            {
+                stockfishUnavailable = true;
+                ShutdownStockfishProcess();
+            }
             finally
             {
+                if (disposed) ShutdownStockfishProcess();
                 stockfishLock.Release();
+                // Dispose can race with the last check above while this call still owns the lock.
+                if (disposed && stockfishLock.Wait(0))
+                {
+                    try { ShutdownStockfishProcess(); }
+                    finally { stockfishLock.Release(); }
+                }
             }
             return null;
         }
@@ -739,8 +795,10 @@ namespace XadrezApp
             return (new Point(fCol, fRow), new Point(tCol, tRow), promo);
         }
 
-        private EngineAnalysisResult QueryInternalEngine(ChessRules rules, bool forWhite, int difficultyLevel, bool isHintOrEvaluationOnly)
+        private EngineAnalysisResult QueryInternalEngine(ChessRules rules, bool forWhite, int difficultyLevel,
+            bool isHintOrEvaluationOnly, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var legalBaseMoves = rules.GetAllLegalMoves(forWhite);
             if (legalBaseMoves.Count == 0)
             {
@@ -784,6 +842,7 @@ namespace XadrezApp
 
             foreach (var mv in rootCandidates)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 char[,] copy = ApplyMoveOnCopy(rules.Board, mv.From, mv.To, mv.Promotion, out Point? nextEp, rootCastling, out byte nextCastling);
 
                 int repetitionPenalty = 0;
@@ -801,7 +860,8 @@ namespace XadrezApp
                     nextEp,
                     nextCastling,
                     ref searchedNodes,
-                    out string childPv);
+                    out string childPv,
+                    cancellationToken);
 
                 if (Math.Abs(val) < 40000)
                     val += repetitionPenalty;
@@ -933,12 +993,13 @@ namespace XadrezApp
             Point? epTarget,
             byte castling,
             ref long nodes,
-            out string bestPvLine)
+            out string bestPvLine,
+            CancellationToken cancellationToken)
         {
-            nodes++;
+            if ((nodes++ & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
             bestPvLine = "";
             if (depth <= 0)
-                return QuiescenceCaptures(rules, b, alpha, beta, whiteToMove, epTarget, 3, ref nodes);
+                return QuiescenceCaptures(rules, b, alpha, beta, whiteToMove, epTarget, 3, ref nodes, cancellationToken);
 
             var moves = GeneratePseudoLegalOrdered(b, whiteToMove, epTarget, castling, capturesOnly: false);
             int legalMovesFound = 0;
@@ -954,7 +1015,7 @@ namespace XadrezApp
                     if (rules.IsKingInCheck(copy, true)) continue;
 
                     legalMovesFound++;
-                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, false, nextEp, nextCastling, ref nodes, out string childPv);
+                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, false, nextEp, nextCastling, ref nodes, out string childPv, cancellationToken);
                     if (eval > maxEval)
                     {
                         maxEval = eval;
@@ -981,7 +1042,7 @@ namespace XadrezApp
                     if (rules.IsKingInCheck(copy, false)) continue;
 
                     legalMovesFound++;
-                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, true, nextEp, nextCastling, ref nodes, out string childPv);
+                    int eval = SearchAlphaBeta(rules, copy, depth - 1, alpha, beta, true, nextEp, nextCastling, ref nodes, out string childPv, cancellationToken);
                     if (eval < minEval)
                     {
                         minEval = eval;
@@ -1007,9 +1068,10 @@ namespace XadrezApp
             bool whiteToMove,
             Point? epTarget,
             int qDepth,
-            ref long nodes)
+            ref long nodes,
+            CancellationToken cancellationToken)
         {
-            nodes++;
+            if ((nodes++ & 255) == 0) cancellationToken.ThrowIfCancellationRequested();
             int standPat = EvaluateBoardWhiteRelative(b);
             if (qDepth <= 0) return standPat;
 
@@ -1024,7 +1086,7 @@ namespace XadrezApp
                     char[,] copy = ApplyMoveOnCopy(b, cap.From, cap.To, cap.Promotion, out Point? nextEp, 0, out _);
                     if (rules.IsKingInCheck(copy, true)) continue;
 
-                    int score = QuiescenceCaptures(rules, copy, alpha, beta, false, nextEp, qDepth - 1, ref nodes);
+                    int score = QuiescenceCaptures(rules, copy, alpha, beta, false, nextEp, qDepth - 1, ref nodes, cancellationToken);
                     if (score >= beta) return beta;
                     if (score > alpha) alpha = score;
                 }
@@ -1041,7 +1103,7 @@ namespace XadrezApp
                     char[,] copy = ApplyMoveOnCopy(b, cap.From, cap.To, cap.Promotion, out Point? nextEp, 0, out _);
                     if (rules.IsKingInCheck(copy, false)) continue;
 
-                    int score = QuiescenceCaptures(rules, copy, alpha, beta, true, nextEp, qDepth - 1, ref nodes);
+                    int score = QuiescenceCaptures(rules, copy, alpha, beta, true, nextEp, qDepth - 1, ref nodes, cancellationToken);
                     if (score <= alpha) return alpha;
                     if (score < beta) beta = score;
                 }

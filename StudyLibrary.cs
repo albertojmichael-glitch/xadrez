@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 
 namespace XadrezApp
 {
@@ -6,6 +7,9 @@ namespace XadrezApp
     {
         public string Title { get; set; } = "";
         public string Theme { get; set; } = "";
+        public string Level { get; set; } = "Iniciante";
+        public string Phase { get; set; } = "Meio-jogo";
+        public string Opening { get; set; } = "";
         public string Fen { get; set; } = "";
         public string SolutionUci { get; set; } = "";
         public string Hint { get; set; } = "";
@@ -142,6 +146,10 @@ namespace XadrezApp
             (new[] { "g3" }, "A00: Abertura Benko / Fianchetto do Rei")
         };
 
+        public static IReadOnlyList<OpeningLesson> GetOpeningBook() => Openings
+            .Select(entry => new OpeningLesson(entry.name, string.Join(" ", entry.moves), GetOpeningLesson(entry.moves)))
+            .OrderBy(entry => entry.Name).ToArray();
+
         public static string DetectOpening(List<string> sanMoves)
         {
             if (sanMoves.Count == 0) return "Posição Inicial (Aguardando lances)";
@@ -200,6 +208,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #1: Mate Pastor (Mate em 1)",
+                Phase = "Abertura", Opening = "Jogo Aberto",
                 Theme = "Ataque em f7",
                 Fen = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4",
                 SolutionUci = "h5f7",
@@ -232,6 +241,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #5: Mate de Legal",
+                Level = "Intermediário", Phase = "Abertura", Opening = "Defesa Philidor",
                 Theme = "Mate Clássico de Cavalos e Bispo",
                 Fen = "r2qkbnr/ppp2ppp/2np4/4N3/2B1P3/2N5/PPPP1PPP/R1BbK2R w KQkq - 0 6",
                 SolutionUci = "c4f7",
@@ -296,6 +306,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #13: Mate da Ópera de Morphy",
+                Level = "Intermediário", Phase = "Abertura", Opening = "Defesa Philidor",
                 Theme = "Mate Clássico com Torre e Bispo",
                 Fen = "1n2kb1r/p4ppp/4q3/4p1B1/4P3/8/PPP2PPP/2KR3R w k - 0 17",
                 SolutionUci = "d1d8",
@@ -312,9 +323,10 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #15: Coroação com Xeque-Mate",
+                Phase = "Final",
                 Theme = "Promoção de Peão Decisiva",
                 Fen = "6k1/3P1ppp/8/8/8/8/5PPP/6K1 w - - 0 1",
-                SolutionUci = "d7d8",
+                SolutionUci = "d7d8q",
                 Hint = "Avance o peão passado de d7 para d8 promovendo para Dama com mate no corredor!"
             },
             new TacticalPuzzle
@@ -352,6 +364,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #20: O Beijo da Morte (Dama + Rei)",
+                Phase = "Final",
                 Theme = "Mate de Dama Apoiada pelo Rei",
                 Fen = "7k/8/5K2/8/8/8/6Q1/8 w - - 0 1",
                 SolutionUci = "g2g7",
@@ -360,6 +373,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #21: Mate da Escadinha (Duas Torres)",
+                Phase = "Final",
                 Theme = "Coordenação de Torres na 7ª e 8ª",
                 Fen = "7k/1R6/8/8/8/8/8/R5K1 w - - 0 1",
                 SolutionUci = "a1a8",
@@ -416,6 +430,7 @@ namespace XadrezApp
             new TacticalPuzzle
             {
                 Title = "Puzzle #28: Bateria na Grande Diagonal",
+                Level = "Intermediário",
                 Theme = "Dama + Bispo em a1-h8",
                 Fen = "r4rk1/ppp2p1p/6p1/8/8/2Q5/PB3PPP/1K6 w - - 0 1",
                 SolutionUci = "c3g7",

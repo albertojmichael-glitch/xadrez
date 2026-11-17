@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Drawing;
 using Xunit;
 using XadrezApp;
 
@@ -17,22 +16,8 @@ namespace XadrezApp.Tests
                 Assert.False(string.IsNullOrWhiteSpace(puzzle.Title));
                 Assert.False(string.IsNullOrWhiteSpace(puzzle.Theme));
                 Assert.False(string.IsNullOrWhiteSpace(puzzle.Hint));
-                Assert.Equal(4, puzzle.SolutionUci.Length);
-
-                var rules = new ChessRules();
-                bool loaded = rules.TryLoadFen(puzzle.Fen, out string fenError);
-                Assert.True(loaded, $"Falha no FEN do '{puzzle.Title}': {fenError}");
-
-                Point? from = ChessRules.AlgebraicToSquare(puzzle.SolutionUci.Substring(0, 2));
-                Point? to = ChessRules.AlgebraicToSquare(puzzle.SolutionUci.Substring(2, 2));
-
-                Assert.NotNull(from);
-                Assert.NotNull(to);
-
-                var legalTargets = rules.GetLegalMovesForSquare(from.Value.X, from.Value.Y, rules.WhiteTurn);
-                Assert.True(
-                    legalTargets.Contains(to.Value),
-                    $"A solução '{puzzle.SolutionUci}' do '{puzzle.Title}' não é um lance legal na posição FEN do puzzle.");
+                Assert.True(StudyCatalog.TryReadSolution(puzzle, out var steps, out var error), $"{puzzle.Title}: {error}");
+                Assert.NotEmpty(steps);
             }
         }
 

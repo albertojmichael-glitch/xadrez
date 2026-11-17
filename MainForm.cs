@@ -1,12 +1,13 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace XadrezApp
 {
-    public class MainForm : Form
+    public partial class MainForm : Form
     {
         private readonly GameController game = new GameController();
         private readonly AnalysisController analysis = new AnalysisController();
@@ -64,6 +65,13 @@ namespace XadrezApp
                 Location = new Point(12, 102)
             };
             boardView.SquareLeftClicked += OnBoardSquareLeftClicked;
+            boardView.CanDragPiece = square =>
+            {
+                char piece = game.Rules.Board[square.Y, square.X];
+                return !game.GameOver && piece != '.' &&
+                    char.IsUpper(piece) == (game.ActivePuzzle != null ? game.Rules.WhiteTurn : true);
+            };
+            boardView.PremoveCancelled += () => tutorStatusLabel.Text = isEnglish ? "Premove canceled." : "Premove cancelado.";
             boardView.ScreenReaderAnnouncement += msg => tutorStatusLabel.Text = $"🔊 {msg}";
 
             clock = new ClockController(
@@ -92,17 +100,21 @@ namespace XadrezApp
             fileMenu.DropDownItems.Add("📋 Copiar FEN para Área de Transferência", null, (s, e) => CopyFen());
             fileMenu.DropDownItems.Add("📥 Carregar Posição FEN...", null, (s, e) => PromptLoadFen());
             fileMenu.DropDownItems.Add("💾 Exportar / Salvar Partida PGN...", null, (s, e) => ExportPgn());
+            fileMenu.DropDownItems.Add("Salvar partida no histórico...", null, (_, _) => SaveGameToHistory());
+            fileMenu.DropDownItems.Add("Histórico de partidas e relatórios...", null, (_, _) => BrowseHistory());
             fileMenu.DropDownItems.Add(new ToolStripSeparator());
             fileMenu.DropDownItems.Add("🚪 Sair / Exit", null, (s, e) => Close());
 
-            var puzzlesMenu = new ToolStripMenuItem("🧩 Puzzles Táticos (15 Desafios)");
-            for (int i = 0; i < StudyLibrary.Puzzles.Count; i++)
+            var puzzlesMenu = new ToolStripMenuItem("🧩 Puzzles Táticos");
+            puzzlesMenu.DropDownItems.Add("Biblioteca e soluções...", null, (_, _) => BrowsePuzzles());
+            puzzlesMenu.DropDownItems.Add("Criar puzzle personalizado...", null, (_, _) => CreatePuzzle());
+            var currentSolution = puzzlesMenu.DropDownItems.Add("Ver solução do puzzle atual", null, (_, _) =>
             {
-                var pz = StudyLibrary.Puzzles[i];
-                puzzlesMenu.DropDownItems.Add(pz.Title, null, (s, e) => StartPuzzle(pz));
-            }
+                if (game.ActivePuzzle is TacticalPuzzle current) PreviewPuzzleSolution(current);
+            });
+            puzzlesMenu.DropDownOpening += (_, _) => currentSolution.Enabled = game.ActivePuzzle != null;
             puzzlesMenu.DropDownItems.Add(new ToolStripSeparator());
-            puzzlesMenu.DropDownItems.Add("🔙 Sair do Modo Puzzle (Partida Normal)", null, (s, e) => ResetBoard());
+            puzzlesMenu.DropDownItems.Add("Voltar à partida normal", null, (_, _) => ResetBoard());
 
             var tutorialsMenu = new ToolStripMenuItem("📚 Mini-Tutoriais & Lições");
             foreach (var tut in StudyLibrary.MiniTutorials)
@@ -113,6 +125,7 @@ namespace XadrezApp
             tutorialsMenu.DropDownItems.Add(new ToolStripSeparator());
             tutorialsMenu.DropDownItems.Add("🎓 Alternar Modo Professor (Melhor Lance + Alternativo + Antes/Depois)", null, (s, e) => ToggleTeacherMode());
             tutorialsMenu.DropDownItems.Add("💡 Ver Lição Estratégica da Abertura Atual", null, (s, e) => ShowCurrentOpeningLesson());
+            tutorialsMenu.DropDownItems.Add("Livro de aberturas...", null, (_, _) => BrowseOpeningBook());
 
             var viewMenu = new ToolStripMenuItem("🎨 View & Acessibilidade");
             viewMenu.DropDownItems.Add("🪵 Tabuleiro: Madeira", null, (s, e) => SetTheme("Madeira"));
@@ -173,12 +186,7 @@ namespace XadrezApp
             btnTakeback = AddToolbarBtn("↩️ Voltar", 204, 64, (s, e) => TakebackMove());
             btnHint = AddToolbarBtn("💡 Dica IA", 270, 68, (s, e) => RunSafe(() => RunAnalysisAndHintAsync(true)));
             btnTeacher = AddToolbarBtn("🎓 Prof: OFF", 340, 76, (s, e) => ToggleTeacherMode());
-            btnPuzzles = AddToolbarBtn("🧩 Puzzles", 418, 66, (s, e) =>
-            {
-                if (game.ActivePuzzle != null)
-                    game.CurrentPuzzleIndex = (game.CurrentPuzzleIndex + 1) % StudyLibrary.Puzzles.Count;
-                StartPuzzle(StudyLibrary.Puzzles[game.CurrentPuzzleIndex]);
-            });
+            btnPuzzles = AddToolbarBtn("🧩 Puzzles", 418, 66, (_, _) => BrowsePuzzles());
             btnPgn = AddToolbarBtn("💾 PGN", 486, 52, (s, e) => ExportPgn());
             btnZoomOut = AddToolbarBtn("🔍-", 540, 28, (s, e) => boardView.AdjustZoom(-0.10f));
             btnZoomIn = AddToolbarBtn("🔍+", 570, 28, (s, e) => boardView.AdjustZoom(0.10f));
@@ -307,7 +315,12 @@ namespace XadrezApp
                 Size = new Size(95, 25),
                 FlatStyle = FlatStyle.System
             };
-            btnAbortSearch.Click += (s, e) => analysis.StopSearch();
+            btnAbortSearch.Click += (_, _) =>
+            {
+                if (game.IsBotThinking) return;
+                game.CancelRunningHint(analysis);
+                tutorStatusLabel.Text = isEnglish ? "Analysis canceled." : "Análise cancelada.";
+            };
 
             tutorStatusLabel = new Label
             {
@@ -606,13 +619,20 @@ namespace XadrezApp
         private void ResetGameState()
         {
             activeTutorial = null;
+            archiveId = Guid.NewGuid();
+            gameStartedAt = DateTimeOffset.Now;
+            savedGameDetails = null;
+            puzzleSteps = Array.Empty<PuzzleStep>();
+            puzzlePly = 0;
             game.ResetGameState(analysis, clock, boardView, clockCombo.SelectedItem?.ToString() ?? "Fischer 5+3");
             moveHistoryList.Items.Clear();
+            btnAbortSearch.Enabled = true;
         }
 
         private void EndCurrentGame(string statusText)
         {
             game.EndCurrentGame(analysis, clock, boardView);
+            btnAbortSearch.Enabled = true;
             tutorStatusLabel.Text = statusText;
         }
 
@@ -624,10 +644,10 @@ namespace XadrezApp
             openingBookLabel.Text = isEnglish
                 ? "📖 Opening: Initial Position (Waiting for 1st move)"
                 : "📖 Abertura: Posição Inicial (Aguardando 1º lance)";
-            string sfStatus = analysis.IsUsingStockfish
-                ? (isEnglish ? "Official Stockfish MultiPV Connected" : "Stockfish Oficial (MultiPV) Conectado")
-                : (isEnglish ? "Internal Positional/Endgame Engine Active" : "Engine Tática/Finais Interna (MultiPV) Ativa");
-            engineLogBox.Text = $"[{sfStatus}] {(isEnglish ? "Teacher Mode, 4 Mini-Tutorials & 15 Puzzles ready." : "Modo Professor, 4 Mini-Tutoriais e 15 Puzzles prontos.")}" + Environment.NewLine;
+            string sfStatus = isEnglish
+                ? "The engine starts on the first search"
+                : "A engine inicia na primeira busca";
+            engineLogBox.Text = $"[{sfStatus}] {(isEnglish ? "Teacher Mode, tutorials and puzzle library ready." : "Modo Professor, tutoriais e biblioteca de puzzles disponíveis.")}" + Environment.NewLine;
             tutorStatusLabel.Text = isEnglish ? "Your turn (White)" : "Sua vez (Brancas)";
 
             RefreshLegalMovesTable();
@@ -637,17 +657,14 @@ namespace XadrezApp
 
         private void StartPuzzle(TacticalPuzzle puzzle)
         {
-            ResetBoard();
-            if (!game.Rules.TryLoadFen(puzzle.Fen, out string error))
+            if (!StudyCatalog.TryReadSolution(puzzle, out var steps, out string error))
             {
-                game.Rules.Reset();
-                MessageBox.Show($"O puzzle \"{puzzle.Title}\" tem um FEN inválido:\n\n{error}", "Puzzle Inválido", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, error, "Puzzle inválido", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
             }
-            int idx = StudyLibrary.Puzzles.IndexOf(puzzle);
-            if (idx >= 0)
-                game.CurrentPuzzleIndex = idx;
-
+            ResetBoard();
+            game.Rules.LoadFen(puzzle.Fen);
+            puzzleSteps = steps;
             game.ActivePuzzle = puzzle;
             UpdateOpeningBannerText();
             tutorStatusLabel.Text = $"💡 {(isEnglish ? "Hint" : "Dica")}: {puzzle.Hint}";
@@ -821,15 +838,22 @@ namespace XadrezApp
 
         private void RefreshLegalMovesTable()
         {
-            legalMovesList.Items.Clear();
-            foreach (var mv in game.Rules.GetAllLegalMoves(game.Rules.WhiteTurn))
+            var legalMoves = game.Rules.GetAllLegalMoves(game.Rules.WhiteTurn);
+            boardView.RefreshPositionFeedback(legalMoves.Count == 0);
+            legalMovesList.BeginUpdate();
+            try
             {
-                string f = ChessRules.SquareToAlgebraic(mv.from);
-                string t = ChessRules.SquareToAlgebraic(mv.to);
-                var item = new ListViewItem($"{f}-{t}");
-                item.SubItems.Add($"{f}{t}");
-                legalMovesList.Items.Add(item);
+                legalMovesList.Items.Clear();
+                foreach (var move in legalMoves)
+                {
+                    string from = ChessRules.SquareToAlgebraic(move.from);
+                    string to = ChessRules.SquareToAlgebraic(move.to);
+                    var item = new ListViewItem($"{from}-{to}");
+                    item.SubItems.Add($"{from}{to}");
+                    legalMovesList.Items.Add(item);
+                }
             }
+            finally { legalMovesList.EndUpdate(); }
         }
 
         private void OnBoardSquareLeftClicked(Point clicked)
@@ -849,27 +873,26 @@ namespace XadrezApp
 
             if (!isPuzzleMode && (game.IsBotThinking || !game.Rules.WhiteTurn))
             {
-                if (boardView.PremoveSelection.HasValue && boardView.PremoveSelection.Value != clicked)
+                char piece = game.Rules.Board[row, col];
+                bool ownPiece = piece != '.' && char.IsUpper(piece);
+                if (ownPiece)
                 {
-                    boardView.QueuedPremove = (boardView.PremoveSelection.Value, clicked);
+                    boardView.PremoveSelection = clicked;
+                    boardView.QueuedPremove = null;
+                    tutorStatusLabel.Text = isEnglish ? "Select a premove destination (Esc to cancel)." :
+                        "Escolha o destino do premove (Esc para cancelar).";
+                }
+                else if (boardView.PremoveSelection is Point origin)
+                {
+                    boardView.QueuedPremove = (origin, clicked);
                     boardView.PremoveSelection = null;
-                    tutorStatusLabel.Text = isEnglish
-                        ? $"⚡ Premove scheduled: {ChessRules.SquareToAlgebraic(boardView.QueuedPremove.Value.from)}->{ChessRules.SquareToAlgebraic(boardView.QueuedPremove.Value.to)}"
-                        : $"⚡ Jogada automática (Premove) agendada: {ChessRules.SquareToAlgebraic(boardView.QueuedPremove.Value.from)}->{ChessRules.SquareToAlgebraic(boardView.QueuedPremove.Value.to)}";
+                    string route = $"{ChessRules.SquareToAlgebraic(origin)} → {ChessRules.SquareToAlgebraic(clicked)}";
+                    tutorStatusLabel.Text = isEnglish ? $"Premove queued: {route} (Esc to cancel)." :
+                        $"Premove agendado: {route} (Esc para cancelar).";
                 }
                 else
                 {
-                    char piece = game.Rules.Board[row, col];
-                    if (piece != '.' && char.IsUpper(piece))
-                    {
-                        boardView.PremoveSelection = clicked;
-                        boardView.QueuedPremove = null;
-                    }
-                    else
-                    {
-                        boardView.PremoveSelection = null;
-                        boardView.QueuedPremove = null;
-                    }
+                    boardView.QueuedPremove = null;
                 }
                 boardView.Invalidate();
                 return;
@@ -970,18 +993,19 @@ namespace XadrezApp
             if (generation != game.GameGeneration || game.GameOver) return;
 
             game.CancelRunningHint(analysis);
+            boardView.ClearActiveSelectionAndPremove();
             game.History.Push(preMoveSnapshot);
 
             int moveNum = game.Rules.FullMoveNumber;
+            bool capture = game.Rules.IsCaptureDestination(from, to);
             string whiteSan = game.Rules.ExecuteMove(from, to, promoPiece);
             bool isBookMove = StudyLibrary.IsBookMove(game.Rules.SanMoves);
             clock.ApplyClockIncrement(true);
 
             boardView.ClearSelectionAndHint();
-            boardView.LastMove = (from, to);
-            boardView.LastPromotionSquare = isWhitePromotion ? to : null;
+            boardView.AnimateMove(from, to, capture, isWhitePromotion);
             UpdateOpeningBannerText();
-            boardView.Invalidate();
+            RefreshLegalMovesTable();
 
             var rowItem = new ListViewItem(moveNum.ToString()) { UseItemStyleForSubItems = false };
             rowItem.SubItems.Add(whiteSan);
@@ -1028,6 +1052,7 @@ namespace XadrezApp
         private async Task RunBotTurnAsync(int generation, ListViewItem rowItem, PlayerMoveInfo? playerMove)
         {
             game.IsBotThinking = true;
+            btnAbortSearch.Enabled = false;
             tutorStatusLabel.Text = playerMove != null
                 ? (isEnglish ? "🤖 Analyzing your move accuracy and calculating Bot reply..." : "🤖 Analisando a precisão do seu lance e calculando resposta do Bot...")
                 : (isEnglish ? "🤖 Bot (Black) calculating move..." : "🤖 Bot (Pretas) calculando o lance...");
@@ -1035,9 +1060,6 @@ namespace XadrezApp
             bool botTurnCompleted = false;
             try
             {
-                await Task.Delay(120);
-                if (generation != game.GameGeneration) return;
-
                 int diffIdx = difficultyCombo.SelectedIndex;
                 int moveNumber = int.TryParse(rowItem.Text, out int mn) ? mn : game.Rules.FullMoveNumber;
 
@@ -1079,11 +1101,11 @@ namespace XadrezApp
                     engineLogBox.AppendText("[Aviso] A engine não devolveu um lance legal; usando um lance alternativo." + Environment.NewLine);
 
                 bool isBlackPromo = game.Rules.Board[botFrom.Y, botFrom.X] == 'p' && botTo.Y == 7;
+                bool capture = game.Rules.IsCaptureDestination(botFrom, botTo);
                 string blackSan = game.Rules.ExecuteMove(botFrom, botTo, botPromo ?? 'q');
                 clock.ApplyClockIncrement(false);
 
-                boardView.LastMove = (botFrom, botTo);
-                if (isBlackPromo) boardView.LastPromotionSquare = botTo;
+                boardView.AnimateMove(botFrom, botTo, capture, isBlackPromo);
 
                 rowItem.SubItems[2].Text = blackSan;
                 rowItem.SubItems[3].Text = evalSummary.EvalAfterAnalysis.EvalText;
@@ -1093,6 +1115,16 @@ namespace XadrezApp
                     engineLogBox.AppendText(evalSummary.EvalAfterAnalysis.LogLine + Environment.NewLine);
 
                 game.IsBotThinking = false;
+                if (boardView.PremoveSelection is Point origin)
+                {
+                    boardView.PremoveSelection = null;
+                    char piece = game.Rules.Board[origin.Y, origin.X];
+                    if (piece != '.' && char.IsUpper(piece))
+                    {
+                        boardView.SelectedSquare = origin;
+                        boardView.LegalMoves = game.Rules.GetLegalMovesForSquare(origin.X, origin.Y, true);
+                    }
+                }
                 UpdateOpeningBannerText();
                 RefreshLegalMovesTable();
                 boardView.UpdateAccessibilityInfo(announceToStatus: false);
@@ -1128,6 +1160,10 @@ namespace XadrezApp
                     _ = RunAnalysisAndHintAsync(true);
                 }
             }
+            catch (OperationCanceledException) when (generation != game.GameGeneration)
+            {
+                // Nova partida ou encerramento invalidou o cálculo anterior.
+            }
             catch (Exception ex)
             {
                 if (generation == game.GameGeneration)
@@ -1138,71 +1174,72 @@ namespace XadrezApp
                 if (generation == game.GameGeneration)
                 {
                     game.IsBotThinking = false;
-                    RefreshLegalMovesTable();
-                    boardView.Invalidate();
+                    btnAbortSearch.Enabled = true;
                 }
             }
 
             if (!botTurnCompleted || generation != game.GameGeneration || game.GameOver) return;
 
-            if (boardView.QueuedPremove.HasValue)
+            if (boardView.QueuedPremove is { } queued)
             {
-                var pre = boardView.QueuedPremove.Value;
+                int ply = game.Rules.SanMoves.Count;
+                await Task.Delay(BoardView.MoveAnimationDuration);
+                if (generation != game.GameGeneration || game.GameOver || game.IsBotThinking ||
+                    game.Rules.SanMoves.Count != ply || boardView.QueuedPremove != queued)
+                    return;
+
                 boardView.QueuedPremove = null;
-                var validMoves = game.Rules.GetLegalMovesForSquare(pre.from.X, pre.from.Y, true);
-                if (game.Rules.Board[pre.from.Y, pre.from.X] != '.' && char.IsUpper(game.Rules.Board[pre.from.Y, pre.from.X]) && validMoves.Contains(pre.to))
+                if (game.Rules.GetLegalMovesForSquare(queued.from.X, queued.from.Y, true).Contains(queued.to))
                 {
-                    await Task.Delay(100);
-                    if (generation != game.GameGeneration || game.GameOver) return;
-                    await ExecutePlayerAndBotTurnAsync(pre.from, pre.to);
+                    await ExecutePlayerAndBotTurnAsync(queued.from, queued.to);
                 }
                 else
                 {
-                    boardView.TriggerInvalidMoveFlash(pre.to);
+                    boardView.TriggerInvalidMoveFlash(queued.to);
                     tutorStatusLabel.Text = isEnglish
-                        ? "✖ Premove canceled (illegal move in the new position)."
-                        : "✖ Premove cancelado (lance ilegal na nova posição).";
-                    boardView.Invalidate();
+                        ? "Premove canceled (illegal in the new position)."
+                        : "Premove cancelado (lance ilegal na nova posição).";
                 }
             }
         }
 
         private void HandlePuzzleMove(Point from, Point to)
         {
-            if (game.ActivePuzzle == null || game.GameOver) return;
+            if (game.ActivePuzzle is not TacticalPuzzle puzzle || game.GameOver || puzzlePly >= puzzleSteps.Count)
+                return;
 
-            string playedUci = $"{ChessRules.SquareToAlgebraic(from)}{ChessRules.SquareToAlgebraic(to)}";
-            if (playedUci == game.ActivePuzzle.SolutionUci)
-            {
-                game.CancelRunningHint(analysis);
-
-                var solvedPuzzle = game.ActivePuzzle;
-                game.Rules.ExecuteMove(from, to, 'Q');
-                if (game.Rules.GameResult == "*")
-                    game.Rules.GameResult = "1-0";
-
-                boardView.ClearSelectionAndHint();
-                boardView.LastMove = (from, to);
-                game.GameOver = true;
-                RefreshLegalMovesTable();
-                boardView.Invalidate();
-                tutorStatusLabel.Text = $"🏆 PARABÉNS! Você acertou o {solvedPuzzle.Title}!";
-
-                int currentIdx = StudyLibrary.Puzzles.IndexOf(solvedPuzzle);
-                var nextPuzzle = StudyLibrary.Puzzles[(currentIdx + 1) % StudyLibrary.Puzzles.Count];
-                var ans = MessageBox.Show(
-                    $"Excelente visão tática! Lance correto ({playedUci}).\n\nDeseja ir para o próximo desafio ({nextPuzzle.Title})?",
-                    "🏆 Puzzle Resolvido!",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information);
-                if (ans == DialogResult.Yes && game.ActivePuzzle == solvedPuzzle)
-                    StartPuzzle(nextPuzzle);
-            }
-            else
+            var step = puzzleSteps[puzzlePly];
+            char? promotion = null;
+            bool promotes = char.ToUpperInvariant(game.Rules.Board[from.Y, from.X]) == 'P' && to.Y is 0 or 7;
+            if (step.From == from && step.To == to && promotes)
+                promotion = char.ToLowerInvariant(PromotionDialog.AskPiece(game.Rules.WhiteTurn, this, isEnglish, isDarkMode));
+            if (from != step.From || to != step.To || promotion != step.Promotion)
             {
                 boardView.TriggerInvalidMoveFlash(to);
-                tutorStatusLabel.Text = $"✖ Lance incorreto ({playedUci}). Dica: {game.ActivePuzzle.Hint}";
+                tutorStatusLabel.Text = $"Lance incorreto. Dica: {puzzle.Hint}";
+                return;
             }
+
+            game.CancelRunningHint(analysis);
+            boardView.ClearSelectionAndHint();
+            PlayPuzzleStep(step);
+            if (puzzlePly < puzzleSteps.Count)
+                PlayPuzzleStep(puzzleSteps[puzzlePly]); // Resposta prevista na solução.
+
+            RefreshLegalMovesTable();
+            game.GameOver = puzzlePly == puzzleSteps.Count;
+            tutorStatusLabel.Text = game.GameOver
+                ? $"Puzzle resolvido: {puzzle.Title}"
+                : $"Passo {puzzlePly}/{puzzleSteps.Count}. Continue a sequência. {puzzle.Hint}";
+        }
+
+        private void PlayPuzzleStep(PuzzleStep step)
+        {
+            bool capture = game.Rules.IsCaptureDestination(step.From, step.To);
+            string san = game.Rules.ExecuteMove(step.From, step.To, step.Promotion);
+            puzzlePly++;
+            engineLogBox.AppendText($"[{puzzlePly}/{puzzleSteps.Count}] {san}" + Environment.NewLine);
+            boardView.AnimateMove(step.From, step.To, capture, step.Promotion.HasValue);
         }
 
         private async Task RunAnalysisAndHintAsync(bool showHintArrow)
@@ -1225,6 +1262,10 @@ namespace XadrezApp
             try
             {
                 res = await analysis.AnalyzePositionOrHintAsync(analysisRules, sideToMove);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
             }
             finally
             {

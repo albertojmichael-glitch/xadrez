@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace XadrezApp
@@ -45,15 +46,20 @@ namespace XadrezApp
         public bool IsUsingStockfish => Engine.IsUsingStockfish;
         public bool IsTeacherMode { get; set; } = false;
 
-        public void StopSearch() => Engine.StopSearch();
+        private CancellationTokenSource searchCancellation = new();
+
+        public void StopSearch()
+        {
+            var previous = searchCancellation;
+            searchCancellation = new CancellationTokenSource();
+            previous.Cancel();
+            previous.Dispose();
+        }
 
         public void ClearEvaluations() => MoveEvaluations.Clear();
 
-        public void RemoveLastEvaluation()
-        {
-            if (MoveEvaluations.Count > 0)
-                MoveEvaluations.RemoveAt(MoveEvaluations.Count - 1);
-        }
+        public void RemoveEvaluationsFrom(int moveNumber) =>
+            MoveEvaluations.RemoveAll(move => move.MoveNumber >= moveNumber);
 
         public void RecordCheckmateMove(int moveNum, string whiteSan, bool english = false)
         {
@@ -79,13 +85,14 @@ namespace XadrezApp
             int diffIdx,
             Func<bool> isCancelled)
         {
+            CancellationToken token = searchCancellation.Token;
             EngineAnalysisResult? bestWhiteBefore = null;
             ChessRules? rulesBefore = null;
             if (playerMove != null)
             {
                 rulesBefore = new ChessRules();
                 rulesBefore.RestoreSnapshot(playerMove.Before);
-                bestWhiteBefore = await Task.Run(() => Engine.Analyze(rulesBefore, true, diffIdx, isHintOrEvaluationOnly: true));
+                bestWhiteBefore = await Task.Run(() => Engine.Analyze(rulesBefore, true, diffIdx, isHintOrEvaluationOnly: true, cancellationToken: token), token);
                 if (isCancelled()) return null;
             }
 
@@ -95,16 +102,16 @@ namespace XadrezApp
 
             if (playerMove != null && diffIdx < 3)
             {
-                evalAfterAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: true));
+                evalAfterAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: true, cancellationToken: token), token);
                 if (isCancelled()) return null;
 
                 var botPlayCopy = currentRules.Clone();
-                botAnalysis = await Task.Run(() => Engine.Analyze(botPlayCopy, false, diffIdx, isHintOrEvaluationOnly: false));
+                botAnalysis = await Task.Run(() => Engine.Analyze(botPlayCopy, false, diffIdx, isHintOrEvaluationOnly: false, cancellationToken: token), token);
                 if (isCancelled()) return null;
             }
             else
             {
-                botAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: false));
+                botAnalysis = await Task.Run(() => Engine.Analyze(botRules, false, diffIdx, isHintOrEvaluationOnly: false, cancellationToken: token), token);
                 if (isCancelled()) return null;
                 evalAfterAnalysis = botAnalysis;
             }
@@ -127,13 +134,17 @@ namespace XadrezApp
 
             if (playerMove != null && bestWhiteBefore != null && rulesBefore != null)
             {
-                bool isTactical = playerMove.San.Contains('x') || playerMove.San.Contains('+');
+                bool isSacrifice = playedBest && EngineService.IsMaterialSacrifice(
+                    rulesBefore, playerMove.From, playerMove.To, playerMove.Promotion,
+                    bestWhiteBefore.EvalWhitePawns, evalAfterAnalysis.EvalWhitePawns);
+                int? forcedMate = evalAfterAnalysis.EvalText.StartsWith('#') &&
+                    int.TryParse(evalAfterAnalysis.EvalText[1..], out int distance) && distance > 0 ? distance : null;
                 classification = EngineService.ClassifyMove(
                     bestWhiteBefore.EvalWhitePawns,
                     evalAfterAnalysis.EvalWhitePawns,
                     playedBest,
                     playerMove.IsBookMove,
-                    isTactical);
+                    isSacrifice, forcedMate, playerMove.San.EndsWith('#'));
 
                 double moveAcc = EngineService.ComputeMoveAccuracy(
                     bestWhiteBefore.EvalWhitePawns,
@@ -232,7 +243,9 @@ namespace XadrezApp
 
         public Task<EngineAnalysisResult> AnalyzePositionOrHintAsync(ChessRules analysisRules, bool sideToMove)
         {
-            return Task.Run(() => Engine.Analyze(analysisRules, sideToMove, 3, isHintOrEvaluationOnly: true));
+            CancellationToken token = searchCancellation.Token;
+            return Task.Run(() => Engine.Analyze(analysisRules, sideToMove, 3, isHintOrEvaluationOnly: true,
+                cancellationToken: token), token);
         }
 
         public string BuildPositionReport(ChessRules analysisRules, EngineAnalysisResult res)
