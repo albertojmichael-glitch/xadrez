@@ -95,9 +95,9 @@ namespace XadrezApp.Tests
             bool normalCapture = EngineService.IsMaterialSacrifice(rules, new Point(4, 4), new Point(3, 3), null, 0.3, 0.5);
             Assert.False(normalCapture);
 
-            // 2. Sacrifício do Presente Grego (Bxh7+ entregando Bispo por peão na frente do Rei) É sacrifício real
-            rules.LoadFen("r1bq1rk1/ppp2ppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R1BQK2R w KQ - 0 6");
-            bool greekGift = EngineService.IsMaterialSacrifice(rules, new Point(2, 4), new Point(7, 1), null, 0.4, 1.5);
+            // 2. Bxh7 oferece o bispo em h7 ao rei adversário em h8 em troca de um peão.
+            rules.LoadFen("7k/7p/8/8/8/3B4/8/4K3 w - - 0 1");
+            bool greekGift = EngineService.IsMaterialSacrifice(rules, new Point(3, 5), new Point(7, 1), null, 0.4, 1.5);
             Assert.True(greekGift);
         }
 

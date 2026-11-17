@@ -23,7 +23,6 @@ namespace XadrezApp
         public int HintGeneration { get; private set; } = 0;
 
         public TacticalPuzzle? ActivePuzzle { get; set; } = null;
-        public int CurrentPuzzleIndex { get; set; } = 0;
 
         public int IncrementGameGeneration() => ++GameGeneration;
         public int IncrementHintGeneration() => ++HintGeneration;
@@ -91,7 +90,7 @@ namespace XadrezApp
             GameOver = false;
             boardView.ClearSelectionAndHint();
 
-            analysis.RemoveLastEvaluation();
+            analysis.RemoveEvaluationsFrom(Rules.FullMoveNumber);
 
             if (Rules.SanMoves.Count == 0)
                 clock.StopAndResetStopwatch();

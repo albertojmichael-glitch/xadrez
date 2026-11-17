@@ -44,7 +44,7 @@ Aplicação desktop de xadrez para Windows desenvolvida em **C# (.NET 8 / Window
 - **Ajuda de Lance (*Dica / F1*):** Desenha uma **seta verde** no tabuleiro indicando a melhor jogada disponível e exibe a variante principal em notação SAN.
 
 ### 4. Quebra-Cabeças (*Puzzles*) e Biblioteca de Aberturas
-- **15 Puzzles Táticos Integrados:** Exercícios clássicos prontos para jogar no menu `Puzzles Táticos (15 Desafios)` (Mate Pastor, Mate do Corredor, Garfo Real, Espeto de Bispo, Mate de Legal, Mate Sufocado de Philidor, Mate de Anastásia, Mate Árabe, Mate de Boden, Mate das Ombreiras, Cravada Absoluta, Garfo de Peão, Mate da Ópera de Morphy, Presente Grego e Coroação com Mate).
+- **Biblioteca de puzzles:** 34 exercícios integrados com busca e filtros por tema, nível, abertura e fase (incluindo finais). A biblioteca também permite criar puzzles locais e percorrer cada solução no tabuleiro.
 - **Detecção de Aberturas em Tempo Real (*Opening Book*):** Identifica automaticamente na barra superior aberturas como *Ruy Lopez*, *Italiana (Giuoco Piano)*, *Defesa dos Dois Cavalos*, *Escocesa*, *Gambito do Rei*, *Defesa Siciliana (Najdorf)*, *Francesa*, *Caro-Kann*, *Escandinava*, *Sistema Londres*, *Gambito da Dama*, *Índia do Rei*, *Nimzo-Índia*, *Inglesa* e *Réti*.
 
 ### 5. Cronometragem Digital e Controles Avançados de Tabuleiro
@@ -55,8 +55,8 @@ Aplicação desktop de xadrez para Windows desenvolvida em **C# (.NET 8 / Window
   - **Indicador de Vez e Alerta Acessível:** O relógio de quem tem a vez exibe o ícone `▶` e sublinhado colorido; abaixo de 10 segundos exibe `⚠`, borda destacada e décimos de segundo.
 - **Interação Avançada com o Mouse, Animação e Som:**
   - **Bolinhas e Anéis nos Destinos Legais:** Casas vazias válidas exibem bolinhas discretas e casas de captura exibem anéis destacados, além de realce do último lance e do Rei em xeque.
-  - **Clique ou Arrastar e Soltar (*Drag & Drop*):** Mova peças clicando ou arrastando diretamente, com animação suave de deslize (~125 ms) e efeitos sonoros para lance, captura, xeque e fim de partida (configuráveis em `Exibir -> Ativar Sons dos Lances`).
-  - **Premove (Jogada Antecipada):** Clique em uma peça sua e na casa de destino enquanto a IA está pensando; as casas ficam **azuis** e o lance é executado automaticamente assim que a IA responder.
+  - **Clique ou Arrastar e Soltar (*Drag & Drop*):** A peça acompanha o cursor. As casas de destino ficam marcadas durante a seleção, e capturas e promoções têm destaques próprios.
+  - **Premove (Jogada Antecipada):** Clique em uma peça sua e na casa de destino enquanto a IA está pensando; as casas e a seta ficam **azuis**. Pressione `Esc` no tabuleiro para cancelar. Após a resposta da IA, o lance só será executado se continuar legal.
   - **Botão Direito (Setas e Marcações):** Clique com o botão direito em uma casa para demarcá-la em **vermelho/coral**, ou segure e arraste com o botão direito entre duas casas para desenhar **setas de rota**. Um clique com o botão esquerdo limpa todas as anotações.
 - **Temas Customizáveis:** Alterne instantaneamente entre **Madeira**, **Preto e Branco** e **Branco e Verde**.
 - **Suporte Completo a FEN e PGN:** Copie ou carregue posições **FEN** (com validador estrito de legalidade) e importe ou exporte partidas completas em formato **PGN** padrão.
@@ -132,17 +132,29 @@ dotnet publish Xadrez.csproj -c Release -r win-x64 --self-contained true -p:Publ
 | **Pedir Dica (*Dica IA*)** | Clique em **Dica (F1)** ou pressione `F1` para ver a seta verde da melhor jogada. |
 | **Analisar Posição Profunda** | Clique em **Analisar** (ou no menu `Estudo e Análise -> Analisar Posição Atual (IA)`) para ver o relatório no painel inferior. |
 | **Revisar Histórico da Partida** | Clique em qualquer lance da lista, no Gráfico de Vantagem ou use as teclas `←`, `→`, `Home` e `End`. |
-| **Resolver Puzzles** | Escolha um dos 15 desafios no menu superior **Puzzles Táticos (15 Desafios)**. |
+| **Resolver Puzzles** | Abra **Puzzles Táticos → Biblioteca e soluções**. Use **Ver solução no tabuleiro** para avançar lance a lance. |
 | **Importar / Exportar FEN e PGN** | Acesse o menu superior **Arquivo** (`Ctrl+O` para importar PGN, `Ctrl+S` para salvar PGN). |
+| **Arquivar e exportar uma partida** | Use **File → Salvar partida no histórico**. Em **Histórico de partidas e relatórios**, busque pelo jogador, evento, data ou resultado e filtre por abertura. A partida selecionada pode ser exportada em PGN comentado ou HTML. |
+| **Estudar aberturas** | Abra **Mini-Tutoriais & Lições → Livro de aberturas** e busque por nome ou código ECO. |
 | **Atalhos e Dicas** | Acesse o menu **Ajuda -> Atalhos e Dicas de Uso...** para consultar todos os comandos. |
 
 ---
+
+## Histórico e puzzles locais
+
+O histórico guarda os nomes dos jogadores, o evento, a data e o horário de início, o resultado e as avaliações de IA disponíveis no momento em que você salva. Salvar de novo na mesma partida atualiza o registro. Os arquivos ficam em `%LOCALAPPDATA%\Xadrez\Partidas`.
+
+Em **Puzzles Táticos → Criar puzzle personalizado**, informe a posição inicial em FEN e a sequência completa em UCI, com as respostas do adversário. Por exemplo, `e2e4 e7e5 g1f3` a partir da posição inicial. Inclua a peça em lances de promoção, como `e7e8q`. O jogo valida cada lance antes de salvar em `%LOCALAPPDATA%\Xadrez\Puzzles`.
+
+## Testes automatizados
+
+`dotnet test Xadrez.Tests/Xadrez.Tests.csproj -c Release` executa a suíte no Windows. O workflow de publicação só gera o executável depois que a suíte termina com sucesso.
 
 ## 🛣️ Roadmap de Evolução Arquitetural
 
 - [ ] Desacoplar o `MainForm.cs` separando a renderização do tabuleiro (`BoardView`) dos controladores de partida, relógio e puzzles.
 - [ ] Extrair um serviço dedicado `ChessAnalysisService` com suporte a `MultiPV` nativo no protocolo UCI do Stockfish.
-- [ ] Expandir a suíte de testes automatizados (`xUnit`) com testes `perft` de geração de lances.
+- [ ] Ampliar a cobertura `perft` para posições e profundidades adicionais.
 - [ ] Implementar modo Multiplayer online via WebSockets.
 
 ---

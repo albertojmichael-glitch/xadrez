@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
+using System.Diagnostics;
 using System.Windows.Forms;
 
 namespace XadrezApp
@@ -46,9 +48,25 @@ namespace XadrezApp
         public Point KeyboardCursor { get; private set; } = new Point(4, 6);
         public bool ShowKeyboardFocus { get; private set; } = false;
 
-        private Point? rightDragStart = null;
+        private Point? rightDragStart;
+        private Point? leftMouseDown;
+        private Point mouseDownPixel;
+        private Point dragPixel;
+        private bool dragging;
+        private Point? checkedKing;
+        private bool checkedKingIsMated;
+        private readonly Timer animationTimer;
+        private readonly Stopwatch animationClock = new();
+        private bool animationCapture;
+        private bool animationPromotion;
+        private (Point from, Point to)? dragDrop;
+        private Point? animationStartPixel;
+        public const int MoveAnimationDuration = 170;
+
+        public Func<Point, bool>? CanDragPiece { get; set; }
 
         public event Action<Point>? SquareLeftClicked;
+        public event Action? PremoveCancelled;
         public event Action<string>? ScreenReaderAnnouncement;
 
         public BoardView(ChessRules rules)
@@ -68,6 +86,17 @@ namespace XadrezApp
             {
                 invalidFlashSquare = null;
                 invalidFlashTimer.Stop();
+                Invalidate();
+            };
+
+            animationTimer = new Timer { Interval = 16 };
+            animationTimer.Tick += (_, _) =>
+            {
+                if (animationClock.Elapsed.TotalMilliseconds >= MoveAnimationDuration)
+                {
+                    animationClock.Reset();
+                    animationTimer.Stop();
+                }
                 Invalidate();
             };
 
@@ -111,7 +140,31 @@ namespace XadrezApp
             LastMove = null;
             LastPromotionSquare = null;
             invalidFlashSquare = null;
+            invalidFlashTimer.Stop();
             rightDragStart = null;
+            animationTimer.Stop();
+            animationClock.Reset();
+            CancelDrag();
+        }
+
+        public void RefreshPositionFeedback() => RefreshPositionFeedback(rules.GetAllLegalMoves(rules.WhiteTurn).Count == 0);
+
+        public void RefreshPositionFeedback(bool hasNoLegalMoves)
+        {
+            checkedKing = rules.GetCheckedKingSquare();
+            checkedKingIsMated = checkedKing.HasValue && hasNoLegalMoves;
+        }
+
+        public void AnimateMove(Point from, Point to, bool capture, bool promotion)
+        {
+            LastMove = (from, to);
+            LastPromotionSquare = promotion ? to : null;
+            animationCapture = capture;
+            animationPromotion = promotion;
+            animationStartPixel = dragDrop == (from, to) ? dragPixel : null;
+            animationClock.Restart();
+            animationTimer.Start();
+            Invalidate();
         }
 
         public void ClearActiveSelectionAndPremove()
@@ -296,6 +349,8 @@ namespace XadrezApp
                     e.Handled = true;
                     break;
                 case Keys.Escape:
+                    if (QueuedPremove.HasValue || PremoveSelection.HasValue)
+                        PremoveCancelled?.Invoke();
                     ClearActiveSelectionAndPremove();
                     MarkedSquares.Clear();
                     DrawnArrows.Clear();
@@ -324,8 +379,7 @@ namespace XadrezApp
 
             bool isLegalDest = LegalMoves.Contains(KeyboardCursor);
             bool isSelected = SelectedSquare == KeyboardCursor;
-            bool kingCheck = (piece == 'K' && rules.IsKingInCheck(rules.Board, true)) ||
-                             (piece == 'k' && rules.IsKingInCheck(rules.Board, false));
+            bool kingCheck = checkedKing == KeyboardCursor;
 
             var extras = new List<string>();
             if (isSelected) extras.Add(IsEnglish ? "selected" : "selecionada");
@@ -410,20 +464,81 @@ namespace XadrezApp
 
             if (e.Button == MouseButtons.Left)
             {
-                if (MarkedSquares.Count > 0 || DrawnArrows.Count > 0)
-                {
-                    MarkedSquares.Clear();
-                    DrawnArrows.Clear();
-                }
-
-                SquareLeftClicked?.Invoke(clicked);
-                UpdateAccessibilityInfo(announceToStatus: false);
+                leftMouseDown = clicked;
+                mouseDownPixel = e.Location;
+                Capture = true;
             }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            if (leftMouseDown is not Point origin) return;
+
+            Size threshold = SystemInformation.DragSize;
+            if (!dragging && (Math.Abs(e.X - mouseDownPixel.X) > threshold.Width / 2 ||
+                              Math.Abs(e.Y - mouseDownPixel.Y) > threshold.Height / 2))
+            {
+                if (CanDragPiece?.Invoke(origin) != true) return;
+                dragging = true;
+                ClickSquare(origin);
+            }
+
+            if (dragging)
+            {
+                dragPixel = e.Location;
+                Invalidate();
+            }
+        }
+
+        private void ClickSquare(Point square)
+        {
+            MarkedSquares.Clear();
+            DrawnArrows.Clear();
+            KeyboardCursor = square;
+            SquareLeftClicked?.Invoke(square);
+            UpdateAccessibilityInfo(announceToStatus: false);
+            Invalidate();
+        }
+
+        private void CancelDrag()
+        {
+            leftMouseDown = null;
+            dragging = false;
+        }
+
+        protected override void OnMouseCaptureChanged(EventArgs e)
+        {
+            base.OnMouseCaptureChanged(e);
+            if (Capture) return;
+            CancelDrag();
+            rightDragStart = null;
+            Invalidate();
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (e.Button == MouseButtons.Left && leftMouseDown is Point origin)
+            {
+                bool wasDragging = dragging;
+                CancelDrag();
+                Capture = false;
+                var target = HitTestSquare(e.X, e.Y);
+                if (target is Point destination)
+                {
+                    if (!wasDragging && origin == destination)
+                        ClickSquare(destination);
+                    else if (wasDragging && origin != destination)
+                    {
+                        dragDrop = (origin, destination);
+                        try { ClickSquare(destination); }
+                        finally { dragDrop = null; }
+                    }
+                }
+                Invalidate();
+                return;
+            }
 
             if (e.Button != MouseButtons.Right || !rightDragStart.HasValue) return;
 
@@ -451,7 +566,6 @@ namespace XadrezApp
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            RecalculateBoardGeometry();
 
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -492,9 +606,10 @@ namespace XadrezApp
                 g.DrawString(rank, coordFont, coordBrush, Math.Max(2, ox - 18), oy + i * sqSize + sqSize / 2 - 7);
             }
 
-            bool whiteInCheck = rules.IsKingInCheck(rules.Board, true);
-            bool blackInCheck = rules.IsKingInCheck(rules.Board, false);
-            bool currentSideHasNoMoves = rules.GetAllLegalMoves(rules.WhiteTurn).Count == 0;
+            double progress = Math.Min(1, animationClock.Elapsed.TotalMilliseconds / MoveAnimationDuration);
+            var moving = animationClock.IsRunning ? LastMove : null;
+            Point? dragOrigin = dragging ? leftMouseDown : null;
+            using var squareBrush = new SolidBrush(lightColor);
 
             for (int r = 0; r < 8; r++)
             {
@@ -517,8 +632,15 @@ namespace XadrezApp
                     if (SelectedSquare == pt || PremoveSelection == pt)
                         sqColor = Color.FromArgb(246, 246, 105);
 
-                    using (var brush = new SolidBrush(sqColor))
-                        g.FillRectangle(brush, x, y, sqSize, sqSize);
+                    squareBrush.Color = sqColor;
+                    g.FillRectangle(squareBrush, x, y, sqSize, sqSize);
+
+                    if (moving?.to == pt && (animationCapture || animationPromotion))
+                    {
+                        Color flash = animationPromotion ? Color.Gold : Color.Crimson;
+                        using var flashBrush = new SolidBrush(Color.FromArgb((int)(160 * (1 - progress)), flash));
+                        g.FillRectangle(flashBrush, x, y, sqSize, sqSize);
+                    }
 
                     if (LastPromotionSquare == pt)
                     {
@@ -529,9 +651,9 @@ namespace XadrezApp
                     }
 
                     char piece = rules.Board[r, c];
-                    if ((piece == 'K' && whiteInCheck) || (piece == 'k' && blackInCheck))
+                    if (checkedKing == pt)
                     {
-                        bool isMate = currentSideHasNoMoves && ((piece == 'K' && rules.WhiteTurn) || (piece == 'k' && !rules.WhiteTurn));
+                        bool isMate = checkedKingIsMated;
                         Color checkFill = isMate
                             ? Color.FromArgb(215, 175, 0, 20)
                             : Color.FromArgb(185, 240, 45, 35);
@@ -571,26 +693,12 @@ namespace XadrezApp
                         g.DrawRectangle(orangePen, x + 2, y + 2, sqSize - 4, sqSize - 4);
                     }
 
-                    if (piece != '.')
-                    {
-                        int variant = rules.PieceVariants[r, c];
-                        string key2 = $"{piece}2";
-                        string key1 = $"{piece}1";
-                        string chosenKey = (variant == 2 && pieceImages.ContainsKey(key2)) ? key2 : key1;
+                    if (piece != '.' && moving?.to != pt && dragOrigin != pt)
+                        DrawPieceAt(g, pt, x, y, sqSize);
 
-                        if (pieceImages.TryGetValue(chosenKey, out Image? img))
-                        {
-                            DrawPieceSprite(g, img, piece, x, y, sqSize);
-                        }
-                        else
-                        {
-                            DrawFallbackPiece(g, piece, x, y, sqSize);
-                        }
-                    }
-
-                    if ((piece == 'K' && whiteInCheck) || (piece == 'k' && blackInCheck))
+                    if (checkedKing == pt)
                     {
-                        bool isMate = currentSideHasNoMoves && ((piece == 'K' && rules.WhiteTurn) || (piece == 'k' && !rules.WhiteTurn));
+                        bool isMate = checkedKingIsMated;
                         string badgeText = isMate ? "# MATE" : (IsEnglish ? "CHECK!" : "XEQUE!");
                         DrawCornerBadge(g, badgeText, x + 2, y + 2, isMate ? Color.FromArgb(140, 0, 0) : Color.FromArgb(210, 30, 0), Color.Yellow);
                     }
@@ -614,6 +722,22 @@ namespace XadrezApp
                 }
             }
 
+            if (moving is { } move && dragOrigin != move.to)
+            {
+                double eased = 1 - Math.Pow(1 - progress, 3);
+                int startX = animationStartPixel?.X - sqSize / 2 ?? ox + move.from.X * sqSize;
+                int startY = animationStartPixel?.Y - sqSize / 2 ?? oy + move.from.Y * sqSize;
+                int x = (int)(startX + (ox + move.to.X * sqSize - startX) * eased);
+                int y = (int)(startY + (oy + move.to.Y * sqSize - startY) * eased);
+                DrawPieceAt(g, move.to, x, y, sqSize);
+            }
+
+            if (dragOrigin is Point dragged)
+                DrawPieceAt(g, dragged, dragPixel.X - sqSize / 2, dragPixel.Y - sqSize / 2, sqSize);
+
+            if (QueuedPremove is { } premove)
+                DrawBoardArrow(g, premove.from, premove.to, Color.FromArgb(225, 25, 90, 200), ox, oy, sqSize, "P");
+
             foreach (var arrow in DrawnArrows)
                 DrawBoardArrow(g, arrow.from, arrow.to, Color.FromArgb(200, 55, 70, 75), ox, oy, sqSize, null);
 
@@ -630,6 +754,17 @@ namespace XadrezApp
                 DrawBoardArrow(g, HintArrow.Value.from, HintArrow.Value.to,
                     Color.FromArgb(220, 30, 160, 50), ox, oy, sqSize, AlternativeHintArrow.HasValue ? "1º" : null);
             }
+        }
+
+        private void DrawPieceAt(Graphics g, Point square, int x, int y, int size)
+        {
+            char piece = rules.Board[square.Y, square.X];
+            if (piece == '.') return;
+            if ((rules.PieceVariants[square.Y, square.X] == 2 && pieceImages.TryGetValue($"{piece}2", out Image? image)) ||
+                pieceImages.TryGetValue($"{piece}1", out image))
+                DrawPieceSprite(g, image, piece, x, y, size);
+            else
+                DrawFallbackPiece(g, piece, x, y, size);
         }
 
         private void DrawPieceSprite(Graphics g, Image img, char piece, int x, int y, int sqSize)
@@ -725,7 +860,8 @@ namespace XadrezApp
         {
             if (disposing)
             {
-                try { invalidFlashTimer.Dispose(); } catch { }
+                invalidFlashTimer.Dispose();
+                animationTimer.Dispose();
                 foreach (var img in pieceImages.Values)
                 {
                     try { img.Dispose(); } catch { }
